@@ -1,0 +1,84 @@
+{
+  "name": "@parentos/truman",
+  "version": "0.1.0",
+  "description": "Your app's users are fake. They just don't know it yet.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "truman": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./adapters": {
+      "import": "./dist/adapters/types.js",
+      "types": "./dist/adapters/types.d.ts"
+    },
+    "./providers": {
+      "import": "./dist/agent/providers/types.js",
+      "types": "./dist/agent/providers/types.d.ts"
+    }
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsup",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.0",
+    "log-update": "^6.1.0",
+    "node-cron": "^3.0.3",
+    "yaml": "^2.6.1"
+  },
+  "peerDependencies": {
+    "openai": "^4.0.0",
+    "@anthropic-ai/sdk": "^0.30.0",
+    "playwright": "^1.40.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": { "optional": true },
+    "@anthropic-ai/sdk": { "optional": true },
+    "playwright": { "optional": true }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "@biomejs/biome": "^1.9.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "keywords": [
+    "truman",
+    "synthetic-users",
+    "persona-testing",
+    "ai-testing",
+    "simulation",
+    "user-simulation",
+    "npc",
+    "qa",
+    "ux-testing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Go-Pomegranate/Truman.git"
+  },
+  "files": [
+    "dist",
+    "schemas",
+    "README.md",
+    "LICENSE",
+    "PHILOSOPHY.md"
+  ]
+}

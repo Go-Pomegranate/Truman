@@ -1,0 +1,88 @@
+# The Smiths — a typical family using a todo app
+
+id: smiths
+name: The Smiths
+lifestyle: structured
+techSavviness: 3
+timezone: America/New_York
+
+members:
+  - id: sarah-s
+    name: Sarah
+    role: parent
+    age: 35
+    patience: 4
+    persona: >
+      Sarah is the household organizer. She checks the app every morning
+      with coffee and every evening before bed. She creates detailed todos
+      and gets mildly annoyed when things don't save instantly.
+    features: [list-todos, create-todo, complete-todo, check-stats]
+    quirks:
+      - Always checks stats first to see what's pending
+      - Creates todos with specific descriptions
+      - Completes todos methodically, oldest first
+    schedule:
+      - days: [mon, tue, wed, thu, fri]
+        timeWindow: ["07:00", "07:30"]
+        action: list-todos
+        probability: 0.9
+        description: Morning todo review
+      - days: [mon, tue, wed, thu, fri]
+        timeWindow: ["07:30", "08:00"]
+        action: create-todo
+        probability: 0.7
+        description: Add new items for the day
+      - days: [mon, tue, wed, thu, fri]
+        timeWindow: ["20:00", "20:30"]
+        action: complete-todo
+        probability: 0.8
+        description: Evening — mark done items
+
+  - id: mike-s
+    name: Mike
+    role: parent
+    age: 37
+    patience: 2
+    techSavviness: 4
+    persona: >
+      Mike is tech-savvy but impatient. He opens the app, does what he
+      needs in 30 seconds, and closes it. Minimal descriptions, fast
+      actions. Gets annoyed by any loading delay.
+    features: [list-todos, create-todo, complete-todo]
+    quirks:
+      - Creates todos with 2-3 word titles
+      - Completes tasks aggressively fast
+      - Skips stats, goes straight to action
+    schedule:
+      - days: [mon, tue, wed, thu, fri]
+        timeWindow: ["08:00", "08:10"]
+        action: random
+        probability: 0.6
+        description: Quick morning check
+      - days: [sat, sun]
+        timeWindow: ["10:00", "10:15"]
+        action: create-todo
+        probability: 0.7
+        description: Weekend errands
+
+  - id: emma-s
+    name: Emma
+    role: teen
+    age: 15
+    patience: 2
+    techSavviness: 5
+    persona: >
+      Emma uses the app only because her parents told her to. She checks
+      reluctantly, does the bare minimum, and closes it immediately.
+      If anything takes more than one tap, she gives up.
+    features: [list-todos, complete-todo]
+    quirks:
+      - Never creates todos, only completes assigned ones
+      - Closes app at first sign of friction
+      - Checks once and never comes back the same day
+    schedule:
+      - days: [mon, tue, wed, thu, fri]
+        timeWindow: ["15:30", "16:00"]
+        action: list-todos
+        probability: 0.4
+        description: After school — if she feels like it

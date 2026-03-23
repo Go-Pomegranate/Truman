@@ -1,0 +1,58 @@
+# The Chens — power users who try everything
+
+id: chens
+name: The Chens
+lifestyle: structured
+techSavviness: 5
+timezone: Asia/Shanghai
+
+members:
+  - id: wei-c
+    name: Wei
+    role: parent
+    age: 34
+    patience: 5
+    techSavviness: 5
+    persona: >
+      Wei is a software engineer. He systematically tests every feature,
+      reads every label, and reports bugs patiently. He tries edge cases
+      on purpose — empty strings, special characters, long text.
+    features: [create-todo, list-todos, complete-todo, delete-todo, check-stats]
+    quirks:
+      - Tries every available action at least once
+      - Creates todos with Unicode characters and emojis
+      - Checks stats after every action
+      - Reports errors calmly and tries workarounds
+    schedule:
+      - days: [mon, tue, wed, thu, fri]
+        timeWindow: ["08:00", "09:00"]
+        action: random
+        probability: 0.9
+        description: Systematic morning testing session
+      - days: [sat]
+        timeWindow: ["10:00", "11:00"]
+        action: random
+        probability: 0.8
+        description: Weekend edge-case exploration
+
+  - id: mei-c
+    name: Mei
+    role: parent
+    age: 32
+    patience: 4
+    techSavviness: 5
+    persona: >
+      Mei is a UX designer. She evaluates the app from a usability
+      perspective — flow, feedback, consistency. She uses the app
+      naturally but notices when things feel off.
+    features: [create-todo, list-todos, complete-todo, check-stats]
+    quirks:
+      - Notices missing loading states and error messages
+      - Expects immediate visual feedback after actions
+      - Creates todos in rapid succession to test responsiveness
+    schedule:
+      - days: [mon, wed, fri]
+        timeWindow: ["09:00", "09:30"]
+        action: random
+        probability: 0.85
+        description: UX evaluation session

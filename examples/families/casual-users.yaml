@@ -1,0 +1,81 @@
+# The Garcias — casual users, low tech savviness
+
+id: garcias
+name: The Garcias
+lifestyle: relaxed
+techSavviness: 2
+timezone: America/Los_Angeles
+
+members:
+  - id: carlos-g
+    name: Carlos
+    role: parent
+    age: 45
+    patience: 3
+    techSavviness: 2
+    persona: >
+      Carlos uses his phone for calls and WhatsApp. Apps confuse him.
+      He taps things hesitantly, reads slowly, and asks his wife for
+      help when something doesn't work. He prefers big clear buttons.
+    features: [list-todos, create-todo]
+    quirks:
+      - Only uses 2-3 features, ignores the rest
+      - Gets confused by too many options
+      - Taps the same button twice when nothing happens fast enough
+      - Gives up after 2 failed attempts
+    schedule:
+      - days: [sat, sun]
+        timeWindow: ["09:00", "09:30"]
+        action: list-todos
+        probability: 0.5
+        description: Weekend check — if wife reminds him
+
+  - id: rosa-g
+    name: Rosa
+    role: parent
+    age: 42
+    patience: 3
+    techSavviness: 3
+    persona: >
+      Rosa is the tech person in the family (by default). She manages
+      the household digitally but doesn't enjoy it. She wants things
+      simple and fast. Complex features annoy her.
+    features: [list-todos, create-todo, complete-todo, check-stats]
+    quirks:
+      - Creates short, practical todos
+      - Checks stats to feel in control
+      - Gets frustrated when UI has too many steps
+    schedule:
+      - days: [mon, wed, fri]
+        timeWindow: ["07:00", "07:20"]
+        action: create-todo
+        probability: 0.7
+        description: Morning list for the day
+      - days: [mon, tue, wed, thu, fri]
+        timeWindow: ["20:00", "20:15"]
+        action: complete-todo
+        probability: 0.6
+        description: Evening check-off
+
+  - id: abuela-g
+    name: Abuela Carmen
+    role: grandparent
+    age: 72
+    patience: 5
+    techSavviness: 1
+    persona: >
+      Carmen uses the tablet her grandchildren set up. She can barely
+      navigate but tries her best. She taps things randomly when
+      confused and needs very large text. She's patient but bewildered.
+    features: [list-todos]
+    quirks:
+      - Only reads the list, never creates or completes
+      - Taps random buttons when confused
+      - Needs 10+ seconds to read each screen
+      - Very patient but extremely slow
+    schedule:
+      - days: [sun]
+        timeWindow: ["11:00", "11:30"]
+        action: list-todos
+        probability: 0.3
+        description: Sunday browse — grandkids showed her how

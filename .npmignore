@@ -1,0 +1,9 @@
+src/
+tests/
+examples/
+.github/
+biome.json
+tsconfig.json
+tsup.config.ts
+.gitignore
+.npmignore

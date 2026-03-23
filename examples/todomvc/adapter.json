@@ -1,0 +1,53 @@
+{
+  "baseUrl": "http://localhost:3000/api",
+  "auth": { "type": "none" },
+  "actions": [
+    {
+      "name": "list-todos",
+      "description": "See all todos",
+      "category": "read",
+      "method": "GET",
+      "path": "/todos",
+      "params": []
+    },
+    {
+      "name": "create-todo",
+      "description": "Create a new todo item",
+      "category": "write",
+      "method": "POST",
+      "path": "/todos",
+      "params": [
+        { "name": "title", "type": "string", "required": true, "description": "Todo title", "example": "Buy groceries" }
+      ]
+    },
+    {
+      "name": "complete-todo",
+      "description": "Mark a todo as done",
+      "category": "write",
+      "method": "PATCH",
+      "path": "/todos/{{params.id}}",
+      "params": [
+        { "name": "id", "type": "string", "required": true, "description": "Todo ID" },
+        { "name": "completed", "type": "boolean", "required": true, "description": "Completion status" }
+      ]
+    },
+    {
+      "name": "delete-todo",
+      "description": "Remove a todo",
+      "category": "write",
+      "method": "DELETE",
+      "path": "/todos/{{params.id}}",
+      "params": [
+        { "name": "id", "type": "string", "required": true, "description": "Todo ID" }
+      ]
+    },
+    {
+      "name": "check-stats",
+      "description": "View todo statistics",
+      "category": "read",
+      "method": "GET",
+      "path": "/todos/stats",
+      "params": []
+    }
+  ]
+}

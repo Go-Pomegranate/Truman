@@ -1,0 +1,535 @@
+import { randomUUID } from 'node:crypto';
+import type {
+  SimulationConfig,
+  FamilyConfig,
+  ActionLog,
+  ActionResult,
+  EngineEvent,
+  EventHandler,
+  ChosenAction,
+  ScenarioConfig,
+  ScenarioResult,
+} from '../types.js';
+import { loadFamilies } from '../family/FamilyLoader.js';
+import { FamilyStateManager } from '../family/FamilyState.js';
+import { DecisionEngine } from '../agent/DecisionEngine.js';
+import { ScenarioEvaluator, type SessionHistoryEntry } from './ScenarioEvaluator.js';
+import { DeterministicRunner } from './DeterministicRunner.js';
+import { Scheduler, type ScheduledTask } from './Scheduler.js';
+import { ActionLogger } from '../observer/ActionLogger.js';
+
+const DEFAULT_TICK = 60_000; // 1 minute
+const DEFAULT_CONCURRENCY = 3;
+const MAX_ACTIONS_PER_SESSION = 10;
+const FRUSTRATION_ABORT_THRESHOLD = 0.85;
+
+export class SimulationEngine {
+  private config: SimulationConfig;
+  private families: FamilyConfig[] = [];
+  private stateManager: FamilyStateManager;
+  private decisionEngine: DecisionEngine;
+  private scheduler: Scheduler;
+  private logger: ActionLogger;
+  private eventHandlers: EventHandler[] = [];
+  private running = false;
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private startedAt: Date = new Date();
+  private scenarioEvaluator = new ScenarioEvaluator();
+  private scenarioResults: ScenarioResult[] = [];
+
+  constructor(config: SimulationConfig) {
+    this.config = config;
+    this.stateManager = new FamilyStateManager(config.stateDir);
+    this.decisionEngine = new DecisionEngine(config.llmProvider);
+    this.scheduler = new Scheduler(config.speed);
+    this.logger = new ActionLogger(config.logDir);
+  }
+
+  on(handler: EventHandler): void { this.eventHandlers.push(handler); }
+
+  async start(): Promise<void> {
+    this.families = loadFamilies(this.config.families);
+    this.startedAt = new Date();
+
+    // Initialize state for all families
+    for (const family of this.families) {
+      this.stateManager.getState(family);
+    }
+
+    this.running = true;
+    await this.emit({ type: 'simulation:start', families: this.families.map((f) => f.name) });
+
+    const tickInterval = this.config.tickInterval ?? DEFAULT_TICK;
+    this.tickTimer = setInterval(() => void this.tick(), tickInterval);
+
+    // Run first tick immediately
+    await this.tick();
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
+
+    this.stateManager.save();
+    await this.emit({ type: 'simulation:stop', reason: 'manual' });
+  }
+
+  async runOnce(parallel = false): Promise<void> {
+    this.families = loadFamilies(this.config.families);
+    this.startedAt = new Date();
+    this.running = true;
+
+    for (const family of this.families) {
+      this.stateManager.getState(family);
+    }
+
+    await this.emit({ type: 'simulation:start', families: this.families.map((f) => f.name) });
+
+    if (parallel) {
+      // STRESS MODE: all members + scenarios fire simultaneously
+      const tasks: Promise<void>[] = [];
+      for (const family of this.families) {
+        for (const member of family.members) {
+          const schedule = member.schedule[0];
+          if (!schedule) continue;
+          tasks.push(this.runMemberSession(family, member, schedule).catch((e) => {
+            console.error(`[stress] ${member.name} crashed: ${(e as Error).message}`);
+          }));
+        }
+      }
+      await Promise.all(tasks);
+
+      // Then run scenarios (also parallel)
+      const scenarioTasks: Promise<void>[] = [];
+      for (const family of this.families) {
+        for (const scenario of family.scenarios ?? []) {
+          if (!this.shouldTriggerScenario(scenario)) continue;
+          scenarioTasks.push(this.runScenarioSession(family, scenario).catch((e) => {
+            console.error(`[stress] scenario ${scenario.id} crashed: ${(e as Error).message}`);
+          }));
+        }
+      }
+      await Promise.all(scenarioTasks);
+    } else {
+      // SEQUENTIAL: one member at a time (default)
+      for (const family of this.families) {
+        for (const member of family.members) {
+          const schedule = member.schedule[0];
+          if (!schedule) continue;
+          await this.runMemberSession(family, member, schedule);
+        }
+        if (family.scenarios?.length) {
+          for (const scenario of family.scenarios) {
+            if (!this.shouldTriggerScenario(scenario)) continue;
+            await this.runScenarioSession(family, scenario);
+          }
+        }
+      }
+    }
+
+    this.stateManager.save();
+    await this.emit({ type: 'simulation:stop', reason: parallel ? 'stress-test complete' : 'one-shot complete' });
+  }
+
+  generateReport() {
+    const report = this.logger.generateReport(
+      this.stateManager.getAllStates(),
+      this.startedAt,
+      this.families,
+    );
+    if (this.scenarioResults.length > 0) {
+      report.scenarioResults = this.scenarioResults;
+    }
+    return report;
+  }
+
+  getScheduler(): Scheduler {
+    return this.scheduler;
+  }
+
+  // ─── Private ────────────────────────────────────────────────────
+
+  private async tick(): Promise<void> {
+    if (!this.running) return;
+
+    const tickWindow = this.config.tickInterval ?? DEFAULT_TICK;
+    const tasks = this.scheduler.getScheduledTasks(this.families, tickWindow);
+
+    await this.emit({ type: 'tick', time: this.scheduler.now().toISOString(), scheduled: tasks.length });
+
+    if (tasks.length === 0) return;
+
+    // Run tasks with concurrency limit
+    const concurrency = this.config.concurrency ?? DEFAULT_CONCURRENCY;
+    const chunks = this.chunk(tasks, concurrency);
+
+    for (const chunk of chunks) {
+      await Promise.all(chunk.map((task) => this.runScheduledTask(task)));
+    }
+
+    this.stateManager.save();
+  }
+
+  private async runScheduledTask(task: ScheduledTask): Promise<void> {
+    try {
+      await this.runMemberSession(task.family, task.member, task.schedule);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      console.error(`[npc-engine] Session error for ${task.member.name}: ${error}`);
+    }
+  }
+
+  private async runMemberSession(
+    family: FamilyConfig,
+    member: typeof family.members[0],
+    schedule: typeof member.schedule[0],
+  ): Promise<void> {
+    const sessionId = randomUUID();
+    this.stateManager.startSession(family.id, member.id);
+
+    await this.emit({
+      type: 'session:start',
+      familyId: family.id,
+      memberId: member.id,
+      sessionId,
+    });
+
+    // Authenticate
+    const auth = await this.config.adapter.authenticate(member, family);
+    const ctx = { auth, family, member };
+
+    let actionCount = 0, sessionFrustration = 0, wantsToContinue = true;
+    const sessionHistory: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string }[] = [];
+
+    while (wantsToContinue && actionCount < MAX_ACTIONS_PER_SESSION && this.running) {
+      const [allActions, appState] = await Promise.all([
+        this.config.adapter.getAvailableActions(ctx),
+        this.config.adapter.getAppState(ctx),
+      ]);
+
+      const availableActions = this.filterRepeatedActions(allActions, sessionHistory);
+      const memberState = this.stateManager.getMemberState(family.id, member.id);
+      const decision = await this.decisionEngine.decide({
+        member,
+        family,
+        memberState,
+        availableActions,
+        appState,
+        scheduledAction: schedule,
+        currentTime: this.scheduler.now().toISOString(),
+        sessionHistory,
+      });
+
+      if (this.config.beforeAction && !(await this.config.beforeAction(ctx))) break;
+      await this.emit({ type: 'action:before', familyId: family.id, memberId: member.id, action: decision.action });
+
+      // Guardrail: fill missing required params from action definitions (LLM sometimes sends {})
+      const filledParams = this.fillMissingRequiredParams(decision.action, decision.params, availableActions);
+      const chosenAction: ChosenAction = { name: decision.action, params: filledParams };
+      const result = await this.config.adapter.executeAction(chosenAction, ctx);
+      sessionHistory.push({
+        action: decision.action,
+        params: filledParams,
+        success: result.success,
+        responseSnippet: this.summarizeResponse(result),
+      });
+
+      sessionFrustration = decision.frustration ?? sessionFrustration;
+      actionCount++;
+
+      const log: ActionLog = {
+        timestamp: new Date().toISOString(),
+        sessionId,
+        familyId: family.id,
+        familyName: family.name,
+        memberId: member.id,
+        memberName: member.name,
+        memberRole: member.role,
+        action: decision.action,
+        decision,
+        result,
+        sessionFrustration,
+        actionIndex: actionCount,
+      };
+
+      this.logger.log(log);
+      this.stateManager.recordAction(log);
+
+      await this.emit({ type: 'action:after', log });
+
+      if (this.config.afterAction) await this.config.afterAction(log);
+      wantsToContinue = decision.wantsToContinue;
+      if (sessionFrustration >= FRUSTRATION_ABORT_THRESHOLD) {
+        await this.emit({
+          type: 'member:frustrated',
+          familyId: family.id,
+          memberId: member.id,
+          level: sessionFrustration,
+        });
+        break;
+      }
+
+      if (!result.success) {
+        await this.emit({
+          type: 'issue:detected',
+          issue: {
+            timestamp: log.timestamp,
+            action: decision.action,
+            error: result.error ?? 'Unknown',
+            frustration: sessionFrustration,
+            memberMood: decision.mood ?? 'unknown',
+          },
+          familyId: family.id,
+          memberId: member.id,
+        });
+
+        const reaction = await this.decisionEngine.reactToFailure({
+          member,
+          family,
+          failedAction: decision.action,
+          error: result.error ?? 'Unknown',
+          currentFrustration: sessionFrustration,
+          availableActions,
+        });
+
+        sessionFrustration = reaction.frustration ?? sessionFrustration;
+        wantsToContinue = reaction.wantsToContinue;
+      }
+    }
+
+    if (this.config.adapter.cleanup) await this.config.adapter.cleanup(ctx);
+
+    await this.emit({
+      type: 'session:end',
+      familyId: family.id,
+      memberId: member.id,
+      sessionId,
+      actions: actionCount,
+    });
+  }
+
+  // ─── Scenarios ─────────────────────────────────────────────────
+
+  private shouldTriggerScenario(s: ScenarioConfig): boolean {
+    if (s.trigger === 'always') return true;
+    if (s.trigger === 'random') return Math.random() <= (s.probability ?? 1.0);
+    return true; // 'schedule' — always trigger in --once mode
+  }
+
+  private async runScenarioSession(
+    family: FamilyConfig,
+    scenario: ScenarioConfig,
+  ): Promise<void> {
+    // Deterministic mode: skip LLM, execute fixed steps with assertions
+    if (scenario.deterministic && scenario.steps?.length) {
+      return this.runDeterministicScenario(family, scenario);
+    }
+
+    const member = family.members.find((m) => m.id === scenario.actor);
+    if (!member) {
+      console.error(`[truman] Scenario "${scenario.id}": actor "${scenario.actor}" not found in ${family.id}`);
+      return;
+    }
+
+    const sessionId = randomUUID();
+    const startTime = Date.now();
+    const maxActions = scenario.maxActions ?? 15;
+    this.stateManager.startSession(family.id, member.id);
+
+    await this.emit({
+      type: 'scenario:start',
+      scenarioId: scenario.id,
+      familyId: family.id,
+      actor: member.id,
+      goal: scenario.goal,
+    });
+
+    await this.emit({
+      type: 'session:start',
+      familyId: family.id,
+      memberId: member.id,
+      sessionId,
+    });
+
+    // Authenticate
+    const auth = await this.config.adapter.authenticate(member, family);
+    const ctx = { auth, family, member };
+
+    let actionCount = 0;
+    let sessionFrustration = 0;
+    let wantsToContinue = true;
+    const sessionHistory: SessionHistoryEntry[] = [];
+
+    // Use first schedule entry as fallback (scenario overrides intent via prompt)
+    const fallbackSchedule = member.schedule[0] ?? {
+      days: ['mon'] as const,
+      timeWindow: ['08:00', '09:00'] as [string, string],
+      action: 'random',
+      probability: 1,
+    };
+
+    while (wantsToContinue && actionCount < maxActions && this.running) {
+      const [allActions, appState] = await Promise.all([
+        this.config.adapter.getAvailableActions(ctx),
+        this.config.adapter.getAppState(ctx),
+      ]);
+
+      // Hard constraint: if same action repeated 2+ times in a row, remove it from options
+      // This forces the LLM to pick something else even when gpt-4o-mini ignores the prompt
+      const availableActions = this.filterRepeatedActions(allActions, sessionHistory);
+
+      const memberState = this.stateManager.getMemberState(family.id, member.id);
+
+      // Pass scenario to LLM — it replaces the schedule intent with a mission goal
+      const decision = await this.decisionEngine.decide({
+        member,
+        family,
+        memberState,
+        availableActions,
+        appState,
+        scheduledAction: fallbackSchedule,
+        currentTime: this.scheduler.now().toISOString(),
+        sessionHistory,
+        scenario,
+      });
+
+      await this.emit({ type: 'action:before', familyId: family.id, memberId: member.id, action: decision.action });
+
+      const filledParams = this.fillMissingRequiredParams(decision.action, decision.params, availableActions);
+      const chosenAction: ChosenAction = { name: decision.action, params: filledParams };
+      const result = await this.config.adapter.executeAction(chosenAction, ctx);
+
+      sessionHistory.push({
+        action: decision.action,
+        params: filledParams,
+        success: result.success,
+        responseSnippet: this.summarizeResponse(result),
+      });
+
+      sessionFrustration = decision.frustration ?? sessionFrustration;
+      actionCount++;
+
+      const log: ActionLog = {
+        timestamp: new Date().toISOString(),
+        sessionId,
+        familyId: family.id,
+        familyName: family.name,
+        memberId: member.id,
+        memberName: member.name,
+        memberRole: member.role,
+        action: decision.action,
+        decision,
+        result,
+        sessionFrustration,
+        actionIndex: actionCount,
+      };
+
+      this.logger.log(log);
+      this.stateManager.recordAction(log);
+      await this.emit({ type: 'action:after', log });
+
+      wantsToContinue = decision.wantsToContinue;
+
+      if (sessionFrustration >= FRUSTRATION_ABORT_THRESHOLD) {
+        await this.emit({ type: 'member:frustrated', familyId: family.id, memberId: member.id, level: sessionFrustration });
+        break;
+      }
+
+      if (!result.success) {
+        const reaction = await this.decisionEngine.reactToFailure({
+          member, family,
+          failedAction: decision.action,
+          error: result.error ?? 'Unknown',
+          currentFrustration: sessionFrustration,
+          availableActions,
+        });
+        sessionFrustration = reaction.frustration ?? sessionFrustration;
+        wantsToContinue = reaction.wantsToContinue;
+      }
+    }
+
+    // Evaluate scenario success criteria
+    const scenarioResult = this.scenarioEvaluator.evaluate(scenario, sessionHistory, startTime);
+    this.scenarioResults.push(scenarioResult);
+
+    if (this.config.adapter.cleanup) {
+      await this.config.adapter.cleanup(ctx);
+    }
+
+    await this.emit({ type: 'session:end', familyId: family.id, memberId: member.id, sessionId, actions: actionCount });
+    await this.emit({ type: 'scenario:end', result: scenarioResult });
+  }
+
+  /** Fill missing required params with examples when LLM sends {} */
+  private fillMissingRequiredParams(name: string, params: Record<string, unknown>, actions: import('../types.js').AvailableAction[]): Record<string, unknown> {
+    const def = actions.find((a) => a.name === name);
+    if (!def) return params;
+    const out = { ...params };
+    for (const p of def.params) {
+      if (p.required && out[p.name] == null) {
+        if (p.example) out[p.name] = p.type === 'number' ? Number(p.example) : p.example;
+        else if (p.enumValues?.length) out[p.name] = p.enumValues[0];
+      }
+    }
+    return out;
+  }
+
+  /** Block action repeated 2+ times consecutively */
+  private filterRepeatedActions(actions: import('../types.js').AvailableAction[], history: SessionHistoryEntry[]): import('../types.js').AvailableAction[] {
+    if (history.length < 2) return actions;
+    const last = history[history.length - 1]?.action;
+    if (last && last === history[history.length - 2]?.action) {
+      const f = actions.filter((a) => a.name !== last);
+      return f.length >= 2 ? f : actions;
+    }
+    return actions;
+  }
+
+  // ─── Deterministic Scenarios ────────────────────────────────────
+
+  private async runDeterministicScenario(
+    family: FamilyConfig,
+    scenario: ScenarioConfig,
+  ): Promise<void> {
+    const runner = new DeterministicRunner(
+      this.config.adapter,
+      this.stateManager,
+      this.logger,
+      (event) => this.emit(event),
+    );
+    const result = await runner.run(family, scenario);
+    this.scenarioResults.push(result);
+  }
+
+  private async emit(event: EngineEvent): Promise<void> { for (const h of this.eventHandlers) await h(event); }
+
+  private summarizeResponse(result: ActionResult): string {
+    if (!result.success) return `Error: ${result.error ?? `HTTP ${result.statusCode}`}`;
+    const data = result.response;
+    if (!data) return 'OK (empty)';
+    if (typeof data === 'string') return data.slice(0, 200);
+    const obj = data as Record<string, unknown>;
+    if (obj.id) return `Created: id=${obj.id}${obj.title ? `, title="${obj.title}"` : ''}`;
+    if (Array.isArray(data)) {
+      const ids = data.slice(0, 5).map((i: any) => i.id ? `#${i.id}${i.title ? ` "${i.title}"` : ''}` : '').filter(Boolean);
+      return `${data.length} items${ids.length ? ': ' + ids.join(', ') : ''}`;
+    }
+    const parts: string[] = [];
+    for (const [k, v] of Object.entries(obj)) {
+      if (Array.isArray(v)) {
+        const ids = v.slice(0, 3).map((i: any) => i.id ? `#${i.id}` : '').filter(Boolean);
+        parts.push(`${k}: ${v.length}${ids.length ? ' (' + ids.join(',') + ')' : ''}`);
+      }
+    }
+    return parts.length ? parts.join(' | ') : JSON.stringify(data).slice(0, 200);
+  }
+
+  private chunk<T>(arr: T[], n: number): T[][] {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+    return out;
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "truman-todomvc-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/cors": "^2.8.17",
+    "tsx": "^4.19.0"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.truman/
+*.tsbuildinfo
+.env
+.DS_Store
