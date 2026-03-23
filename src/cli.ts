@@ -10,6 +10,8 @@ import { HttpApiAdapter } from './adapters/HttpApiAdapter.js';
 import { createProvider } from './agent/providers/types.js';
 import { LiveDashboard } from './observer/LiveDashboard.js';
 import { writeJUnitReport } from './observer/JUnitReporter.js';
+import { VoiceNarrator } from './observer/VoiceNarrator.js';
+import { loadFamilies } from './family/FamilyLoader.js';
 import type { EngineEvent, SimulationConfig } from './types.js';
 
 const program = new Command();
@@ -39,6 +41,7 @@ program
   .option('--browser', 'Use Playwright browser adapter (NPC navigates real UI)')
   .option('--headed', 'Show browser window (implies --browser)')
   .option('--stress', 'Stress test: all NPC members run in parallel (concurrent API load)')
+  .option('--voice', 'Enable voice narration — NPCs speak their frustrations (macOS)')
   .action(async (opts) => {
     console.log(chalk.bold.cyan('\n  🎬 Truman v0.1.0\n'));
     console.log(chalk.dim('  Your app\'s users are fake. They just don\'t know it yet.\n'));
@@ -81,6 +84,19 @@ program
       };
 
       const engine = new SimulationEngine(config);
+
+      // Wire up voice narration — NPCs speak their frustrations
+      if (opts.voice) {
+        const narrator = new VoiceNarrator(true);
+        const families = loadFamilies(opts.families.map((f: string) => resolve(f)));
+        for (const family of families) {
+          for (const member of family.members) {
+            narrator.assignVoice(member.id, member.role);
+          }
+        }
+        engine.on((event) => narrator.handleEvent(event));
+        console.log(chalk.magenta('  🎙️  Voice narration ON — NPCs will speak their minds.\n'));
+      }
 
       // Wire up event handler — live dashboard or scrolling log
       let dashboard: LiveDashboard | null = null;
