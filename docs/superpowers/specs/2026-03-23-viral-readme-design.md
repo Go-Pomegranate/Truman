@@ -9,7 +9,7 @@ Rewrite the Truman README to be viral and drive organic sharing on X/Reddit/HN w
 
 ## Tone
 
-Fireship/ThePrimeagen-style dev humor as base, with 2-3 "holy shit" moments for screenshot virality. Direct, bezczelny, zero buzzwords. Professional enough for adoption, sharp enough for sharing.
+Fireship/ThePrimeagen-style dev humor as base, with 2-3 "holy shit" moments for screenshot virality. Direct, audacious, zero buzzwords. Professional enough for adoption, sharp enough for sharing.
 
 ## Viral Mechanics
 
@@ -30,7 +30,7 @@ You think your app is easy to use? Prove it.
 
 ### 3. Sub-tagline (smaller, centered)
 ```
-AI-powered synthetic users that browse your app, get frustrated, and leave — just like real ones.
+Synthetic users that browse your app, get frustrated, and leave — just like real ones.
 ```
 
 ### 4. Badges
@@ -47,16 +47,40 @@ Then you get a report on what worked — and what made them leave.
 ```
 
 ### 6. "Meet your worst users" (viral section)
-Four personas as YAML with comments acting as one-liner jokes:
+Four personas as literal YAML with comments acting as one-liner jokes. This block is both viral content AND format documentation — readers see humor and learn the persona schema simultaneously.
 
-- **Jaden** — Gen Z, patience 1. "If it doesn't load instantly, it doesn't exist." Quirk: swipes before the page finishes rendering.
-- **Linda** — Your mom at Thanksgiving. patience 4. "What's a hamburger menu? Like McDonald's?" Quirks: taps logo expecting it to do something, reads every word on screen.
-- **Wei** — Senior engineer as pentester. patience 5. "Pastes Unicode into every input. Tries SQL injection on the search bar. Files issues in his head." Quirk: opens DevTools first.
-- **Abuela Carmen** — 89yo grandmother. patience 5, techSavviness 1. "Doesn't know what she tapped. Doesn't care. Somehow ended up on the admin panel." Quirks: double-taps everything, holds buttons like a TV remote.
+Use HTML centering for the header, then a fenced YAML code block:
 
-Closing line after YAML block:
+```yaml
+# Gen Z intern. mass-closes tabs if anything takes over 2 seconds.
+- name: Jaden
+  patience: 1
+  persona: "If it doesn't load instantly, it doesn't exist."
+  quirks: ["Swipes before the page finishes rendering"]
+
+# Your mom trying to use your app. Reads every word on screen. Every. Single. Word.
+- name: Linda
+  patience: 4
+  persona: "Reads the Terms of Service. Clicks 'Learn more' on every tooltip. Still not sure what the app does."
+  quirks: ["Taps the logo expecting it to do something", "Reads every word on screen"]
+
+# Senior engineer who treats your app like a pentest.
+- name: Wei
+  patience: 5
+  persona: "Pastes Unicode into every input. Tries SQL injection on the search bar. Files issues in his head."
+  quirks: ["Opens DevTools before anything else"]
+
+# 89-year-old grandmother. Patient. Persistent. Will absolutely break your app.
+- name: Abuela Carmen
+  patience: 5
+  techSavviness: 1
+  persona: "Doesn't know what she tapped. Doesn't care. Somehow ended up on the admin panel."
+  quirks: ["Double-taps everything", "Holds buttons like a TV remote"]
 ```
-Frustration > 0.85 → they leave. Just like your real users do — except these ones tell you why.
+
+Closing line after YAML block (as blockquote):
+```
+> Frustration > 0.85 → they leave. Just like your real users do — except these ones tell you why.
 ```
 
 ### 7. Quickstart
@@ -67,9 +91,12 @@ Point `adapter.json` at your API, then:
 ```bash
 npx @parentos/truman run --once
 ```
-Punchline:
+
+Or try the included [TodoMVC example](examples/todomvc/) — two terminals, two minutes.
+
+Punchline (as blockquote):
 ```
-Two commands. Four synthetic users. One uncomfortable truth about your checkout flow.
+> Two commands. Four synthetic users. One uncomfortable truth about your checkout flow.
 ```
 
 ### 8. How it works
@@ -108,17 +135,21 @@ Unchanged from current README.
 Unchanged from current README.
 
 ### 12. What Truman is NOT
-Unchanged from current README.
+Unchanged from current README (including the closing sentence: "Truman is the closest thing to putting real users in front of your app without actually doing it.").
 
-### 13. Closer (viral, centered)
+### 13. Closer (viral, HTML centered)
+Use `<p align="center">` tags matching the existing header style:
 ```
 Your app isn't hard to use.
 
 You're just the only one who knows where everything is.
 ```
+Followed by the install command in `<code>` tag:
 ```
 npx @parentos/truman run --once
 ```
+
+Separated from footer with `---` horizontal rule.
 
 ### 14. Footer links
 Philosophy, Contributing, Code of Conduct, License — unchanged.
@@ -138,6 +169,7 @@ Philosophy, Contributing, Code of Conduct, License — unchanged.
 | Tagline | "Your app's users are fake..." (passive) | "You think your app is easy to use? Prove it." (challenge) |
 | Sub-tagline | "AI-driven synthetic personas..." (jargon) | "...get frustrated, and leave — just like real ones" (visceral) |
 | Persona examples | Generic Sarah/Mike in docs section | 4 viral archetypes in "Meet your worst users" |
+| Section order | intro → features → quickstart → personas → how-it-works | intro → **personas** → quickstart → how-it-works → features (personas before quickstart creates "I want to try this" impulse) |
 | Quickstart outro | None | "One uncomfortable truth about your checkout flow" |
 | How it works | Technical diagram only | 3-line viral summary + diagram |
 | Features | Descriptive | Sharpened tails ("they remember what broke yesterday") |
