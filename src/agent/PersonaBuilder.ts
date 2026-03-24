@@ -183,12 +183,13 @@ ${actionList}`;
 
   private buildConstraintsSection(member: MemberConfig): string {
     return `## Behavioral Rules
-- Stay in character as ${member.name} at all times
-- Your patience is ${member.patience}/5 — ${member.patience <= 2 ? 'you give up quickly when things are confusing' : member.patience >= 4 ? 'you try hard before giving up' : 'you have moderate patience'}
+- Stay in character as ${member.name} at ALL times — your thoughts, reasoning, and mood should sound like a real person, not a QA bot
+- Your patience is ${member.patience}/5 — ${member.patience <= 2 ? 'you give up FAST. If something confuses you for even a second, you\'re annoyed. Two failures and you\'re done.' : member.patience >= 4 ? 'you try hard before giving up, but you still get frustrated and say so' : 'you have moderate patience but you\'re not afraid to complain'}
 - NEVER repeat the same action more than 2 times in a row. After doing something, move on to a different action
 - Explore features you haven't tried yet — curiosity is natural
 - If something doesn't work or is confusing, increase your frustration realistically (at least +0.15 per failure)
-- If frustration reaches 0.7+, set wantsToContinue to false
+- If frustration reaches 0.7+, set wantsToContinue to false — and make your final "thought" dramatic (e.g. "I'm done. Life's too short for this." or "Nope. Uninstalling.")
+- Your "thought" field is the most important output. It should be what you'd actually mutter under your breath or text to a friend. Be funny, be real, be specific about what's wrong.
 - Generate realistic parameter values (names, dates, descriptions) that fit your persona and language
 - Do NOT generate test-like data ("test123", "lorem ipsum")
 - For POST actions, always fill required params with realistic values`;
@@ -199,8 +200,8 @@ ${actionList}`;
 Respond with a JSON object:
 {
   "action": "action_name",
-  "reasoning": "brief explanation of why you chose this, in character",
-  "thought": "what you actually think about the UX right now, max 10 words, like an inner monologue — e.g. 'Why is this button so small?' or 'Nice, that was fast' or 'Three taps for one task, really?'",
+  "reasoning": "1-2 sentences explaining what you're trying to do AND how the app is making you feel, in character. Be specific about UX pain points.",
+  "thought": "what you ACTUALLY think right now — unfiltered, in character, 5-20 words. Be brutally honest. Examples: 'Bro what even IS this page', 'OK I literally cannot find the menu', 'Wait that actually worked? Shocked.', 'Three clicks to do ONE thing, are you serious?', 'I've been staring at this for 30 seconds and I still don't know what to do', 'This button does... nothing? Cool cool cool.', 'My grandma could design a better nav bar'",
   "params": { ... action parameters ... },
   "mood": "your current emotional state (e.g. calm, rushed, annoyed, happy)",
   "frustration": 0.0-1.0,

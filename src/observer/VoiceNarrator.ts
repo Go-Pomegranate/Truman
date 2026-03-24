@@ -2,6 +2,46 @@ import { execFile, exec, execFileSync } from 'node:child_process';
 import { platform } from 'node:os';
 import type { EngineEvent, MemberRole } from '../types.js';
 
+// ─── Expressive fallback lines ──────────────────────────────────────
+
+const FRUSTRATED_LINES = [
+  "I'm literally about to close this tab.",
+  "Who designed this? Seriously.",
+  "I've clicked everything and nothing works.",
+  "This is the worst app I've used this week.",
+  "Nope. I'm done. Life's too short.",
+  "I don't even know what I'm looking at anymore.",
+  "If I have to click one more broken button...",
+];
+
+const FAILURE_LINES = [
+  "Wait, that didn't work?",
+  "Okay that's broken.",
+  "Cool, so that does nothing.",
+  "Am I doing something wrong or is this app just... bad?",
+  "Error? What error? I literally just clicked a button.",
+  "Hmm, that was supposed to do something, right?",
+];
+
+const ANNOYED_LINES = [
+  "This is taking way too long.",
+  "Where am I even supposed to click?",
+  "I feel like I'm going in circles.",
+  "There has to be a better way to do this.",
+  "Why is everything three clicks away?",
+];
+
+const NEUTRAL_LINES = [
+  "Alright, let's see what this does.",
+  "Okay, interesting.",
+  "Hmm, where to next.",
+  "Let me try this.",
+];
+
+function pick(arr: string[]): string {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 // ─── TTS Backend types ──────────────────────────────────────────────
 
 export type TTSBackend = 'auto' | 'say' | 'piper' | 'edge' | 'espeak';
@@ -69,9 +109,18 @@ interface MemberInfo {
 
 // ─── Voice Narrator ─────────────────────────────────────────────────
 
+interface SessionTracker {
+  actions: number;
+  failures: number;
+  lastAction: string;
+  peakFrustration: number;
+  firstFailure: boolean;
+}
+
 export class VoiceNarrator {
   private members = new Map<string, MemberInfo>();
   private usedVoiceLabels = new Set<string>();
+  private sessionTrackers = new Map<string, SessionTracker>();
   private poolIdx = 0;
   private speaking = false;
   private queue: Array<{ text: string; voice: VoiceProfile }> = [];
@@ -135,16 +184,46 @@ export class VoiceNarrator {
 
     switch (event.type) {
       case 'simulation:start':
-        this.speak('Simulation starting. Let\'s see how they handle this.', NARRATOR_VOICE);
+        this.speak('The simulation begins. Let\'s see who survives.', NARRATOR_VOICE);
         break;
+
+      case 'session:start': {
+        const member = this.members.get(event.memberId);
+        if (!member) break;
+        this.sessionTrackers.set(member.id, { actions: 0, failures: 0, lastAction: '', peakFrustration: 0, firstFailure: true });
+        this.speak(`${member.name} enters the app. Let's see how long they last.`, NARRATOR_VOICE);
+        break;
+      }
 
       case 'action:after': {
         const { log } = event;
         const member = this.members.get(log.memberId);
         if (!member) break;
 
+        const tracker = this.sessionTrackers.get(member.id);
+        if (tracker) {
+          tracker.actions++;
+          tracker.lastAction = log.action;
+          const frustration = log.decision.frustration ?? log.sessionFrustration;
+          if (frustration > tracker.peakFrustration) tracker.peakFrustration = frustration;
+
+          if (!log.result.success) {
+            tracker.failures++;
+            // Narrator comments on first failure
+            if (tracker.firstFailure) {
+              tracker.firstFailure = false;
+              this.speak(`${member.name} just hit their first wall.`, NARRATOR_VOICE);
+            }
+            // Narrator escalates on repeated failures
+            if (tracker.failures === 3) {
+              this.speak(`That's three failures for ${member.name}. This isn't going well.`, NARRATOR_VOICE);
+            }
+          }
+        }
+
         const frustration = log.decision.frustration ?? log.sessionFrustration;
-        const shouldSpeak = !log.result.success || frustration > 0.5 || Math.random() < 0.25;
+        // NPCs speak more often — 40% chance, always on failure or high frustration
+        const shouldSpeak = !log.result.success || frustration > 0.4 || Math.random() < 0.4;
         if (!shouldSpeak) break;
 
         const line = this.extractLine(member, {
@@ -160,19 +239,42 @@ export class VoiceNarrator {
       case 'member:frustrated': {
         const member = this.members.get(event.memberId);
         if (!member) break;
-        this.speak(
-          this.extractLine(member, { success: false, frustration: event.level, reasoning: 'I can\'t take this anymore.' }),
-          member.voice,
-        );
+
+        // NPC speaks their last words
+        const thought = (event as any).thought;
+        if (thought && thought.length > 3) {
+          this.speak(thought, member.voice);
+        } else {
+          this.speak(`I can't do this anymore.`, member.voice);
+        }
+
+        // Narrator eulogizes the dropout
+        const tracker = this.sessionTrackers.get(member.id);
+        const actions = tracker?.actions ?? 0;
+        const failures = tracker?.failures ?? 0;
+        const narratorLine = failures > 0
+          ? `${member.name} has left the building. ${actions} actions, ${failures} failures. The app broke them.`
+          : `${member.name} walked away after ${actions} actions. Not a single error — they just didn't get it.`;
+        this.speak(narratorLine, NARRATOR_VOICE);
+        break;
+      }
+
+      case 'session:end': {
+        const member = this.members.get(event.memberId);
+        if (!member) break;
+        const tracker = this.sessionTrackers.get(member.id);
+        if (tracker && tracker.failures === 0 && tracker.actions > 3) {
+          this.speak(`${member.name} made it through without a single issue. Suspicious.`, NARRATOR_VOICE);
+        }
         break;
       }
 
       case 'scenario:end':
-        this.speak(event.result.success ? 'Scenario passed.' : 'Scenario failed.', NARRATOR_VOICE);
+        this.speak(event.result.success ? 'Against all odds, the scenario passed.' : 'The scenario has failed. As expected.', NARRATOR_VOICE);
         break;
 
       case 'simulation:stop':
-        this.speak('Simulation complete.', NARRATOR_VOICE);
+        this.speak('The simulation is over. The damage has been assessed.', NARRATOR_VOICE);
         break;
     }
   }
@@ -180,23 +282,31 @@ export class VoiceNarrator {
   // ─── Extract spoken line ──────────────────────────────────────────
 
   private extractLine(
-    _member: MemberInfo,
-    ctx: { success: boolean; frustration: number; thought?: string; reasoning: string },
+    member: MemberInfo,
+    ctx: { success: boolean; frustration: number; thought?: string; reasoning?: string },
   ): string {
-    // Priority 1: thought — short UX inner monologue from LLM
+    // Priority 1: thought — the unfiltered inner monologue
     const t = ctx.thought;
-    if (t && t.length > 3 && t.length < 100) return t;
+    if (t && t.length > 3 && t.length < 150) return t;
 
     // Priority 2: first sentence of reasoning
     const r = ctx.reasoning;
     if (r && r.length > 5) {
       const first = r.split(/[.!?]/)[0]?.trim();
-      if (first && first.length > 5 && first.length < 80) return first;
+      if (first && first.length > 5 && first.length < 100) return first;
     }
 
-    if (!ctx.success) return `That didn't work.`;
-    if (ctx.frustration > 0.7) return `I'm losing patience.`;
-    return `Okay.`;
+    // Persona-driven fallbacks
+    if (!ctx.success && ctx.frustration > 0.7) {
+      return pick(FRUSTRATED_LINES);
+    }
+    if (!ctx.success) {
+      return pick(FAILURE_LINES);
+    }
+    if (ctx.frustration > 0.5) {
+      return pick(ANNOYED_LINES);
+    }
+    return pick(NEUTRAL_LINES);
   }
 
   // ─── TTS dispatch ─────────────────────────────────────────────────
