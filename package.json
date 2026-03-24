@@ -41,10 +41,12 @@
     "node-cron": "^3.0.3",
     "yaml": "^2.6.1"
   },
+  "optionalDependencies": {
+    "playwright": "^1.40.0"
+  },
   "peerDependencies": {
     "openai": "^4.0.0",
-    "@anthropic-ai/sdk": "^0.30.0",
-    "playwright": "^1.40.0"
+    "@anthropic-ai/sdk": "^0.30.0"
   },
   "peerDependenciesMeta": {
     "openai": {

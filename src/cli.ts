@@ -605,9 +605,13 @@ async function autoInstallPlaywright(): Promise<void> {
   }
   console.log('');
 
+  // Find playwright CLI in node_modules
+  const playwrightCli = ['npx playwright', 'node_modules/.bin/playwright']
+    .find(cmd => { try { execSync(`${cmd} --version`, { stdio: 'pipe' }); return true; } catch { return false; } })
+    ?? 'npx playwright';
+
   const steps = [
-    { msg: '  Waking up the NPCs...', cmd: 'npm install playwright --no-save --silent' },
-    { msg: '  Downloading Chromium — the NPCs\' window to your world...', cmd: 'npx playwright install chromium' },
+    { msg: '  Downloading Chromium — the NPCs\' window to your world...', cmd: `${playwrightCli} install chromium` },
   ];
 
   for (const step of steps) {
