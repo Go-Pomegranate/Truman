@@ -1,12 +1,11 @@
 {
   "name": "@parentos/truman",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Your app's users are fake. They just don't know it yet.",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "truman": "./dist/cli.js",
-    "@parentos/truman": "./dist/cli.js"
+    "truman": "./dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,6 +14,7 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./cli": "./dist/cli.js",
     "./adapters": {
       "import": "./dist/adapters/types.js",
       "types": "./dist/adapters/types.d.ts"
@@ -53,9 +53,6 @@
       "optional": true
     },
     "@anthropic-ai/sdk": {
-      "optional": true
-    },
-    "playwright": {
       "optional": true
     }
   },

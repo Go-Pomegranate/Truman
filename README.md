@@ -24,7 +24,7 @@
 ## Roast your app in 30 seconds
 
 ```bash
-npx @parentos/truman roast --target https://your-app.com
+npx truman-cli roast --target https://your-app.com
 ```
 
 > Three brutal personas. One command. A report that hurts your feelings.
@@ -83,19 +83,19 @@ npm install @parentos/truman
 Or run it directly — no install needed:
 
 ```bash
-npx @parentos/truman
+npx truman-cli
 ```
 
 ## Quickstart
 
 ```bash
-npx @parentos/truman init my-app && cd my-app
+npx truman-cli init my-app && cd my-app
 ```
 
 Point `adapter.json` at your API, then:
 
 ```bash
-npx @parentos/truman run --once
+npx truman-cli run --once
 ```
 
 Or try the included [TodoMVC example](examples/todomvc/) — two terminals, two minutes.
@@ -187,7 +187,7 @@ Built by the team behind [ParentOS](https://github.com/Go-Pomegranate) — where
 <p align="center">
 <strong>Your app isn't hard to use.</strong><br/>
 You're just the only one who knows where everything is.<br/><br/>
-<code>npx @parentos/truman roast</code><br/><br/>
+<code>npx truman-cli roast</code><br/><br/>
 <a href="https://github.com/Go-Pomegranate/Truman">Star it</a> · <a href="https://discord.gg/wz25vvfdE3">Join Discord</a> · <a href="https://github.com/Go-Pomegranate/Truman/issues">Report a bug</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 

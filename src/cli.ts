@@ -586,7 +586,7 @@ members:
       const { writeFileSync } = await import('node:fs');
       writeFileSync(bugsPath, JSON.stringify(bugs, null, 2), 'utf-8');
       console.log(chalk.magenta(`  🐛 ${bugs.length} bug(s) found → ${bugsPath}`));
-      console.log(chalk.dim(`     View details: npx @parentos/truman bugs ${bugsPath}\n`));
+      console.log(chalk.dim(`     View details: npx truman-cli bugs ${bugsPath}\n`));
     }
 
     if (playwrightAdapter) await playwrightAdapter.close();
@@ -613,7 +613,7 @@ function printBugs(bugPath?: string): void {
 
   if (!bugs || bugs.length === 0) {
     console.log(chalk.dim('\n  No bugs found. Run a roast first:\n'));
-    console.log(chalk.white('    npx @parentos/truman roast --target https://your-app.com\n'));
+    console.log(chalk.white('    npx truman-cli roast --target https://your-app.com\n'));
     return;
   }
 
