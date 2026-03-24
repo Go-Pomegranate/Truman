@@ -80,7 +80,16 @@ program
       let adapter;
 
       if (useBrowser) {
-        const { PlaywrightAdapter } = await import('./adapters/PlaywrightAdapter.js');
+        let PlaywrightAdapter: any;
+        try {
+          ({ PlaywrightAdapter } = await import('./adapters/PlaywrightAdapter.js'));
+        } catch {
+          console.log(chalk.red('  ✗ Playwright is required for browser mode.\n'));
+          console.log(chalk.dim('  Install it:\n'));
+          console.log(chalk.white('    npm install playwright'));
+          console.log(chalk.white('    npx playwright install chromium\n'));
+          process.exit(1);
+        }
         const adapterConfig = await loadAdapterConfig(opts.adapter);
         playwrightAdapter = new PlaywrightAdapter({
           baseUrl: adapterConfig.baseUrl.replace('/api', ''),
@@ -349,11 +358,13 @@ program
 program
   .command('roast')
   .description('Roast any app — 3 brutal personas, voice narration, one report')
-  .option('--url <baseUrl>', 'Base URL of the app API to roast (auto-probes endpoints)')
+  .option('--url <baseUrl>', 'Base URL of the app to roast')
   .option('-a, --adapter <path>', 'Path to existing adapter.json (skips probing)')
   .option('-p, --provider <type>', 'LLM provider: openai | ollama | anthropic', 'openai')
   .option('-m, --model <name>', 'LLM model name', 'gpt-4o-mini')
   .option('--voice [backend]', 'Enable voice narration (default: auto)', 'auto')
+  .option('--browser', 'Use Playwright browser instead of HTTP API probing')
+  .option('--headed', 'Open visible browser window (implies --browser)')
   .action(async (opts) => {
     if (!opts.url && !opts.adapter) {
       console.log(chalk.red('  ✗ Provide --url or --adapter\n'));
@@ -367,9 +378,31 @@ program
     const tmpDir = resolve('.truman/roast');
     mkdirSync(tmpDir, { recursive: true });
 
-    // Step 1: Get adapter — use existing or probe
-    let adapterPath: string;
-    if (opts.adapter) {
+    // Step 1: Get adapter — browser, existing adapter, or probe
+    const useBrowser = opts.browser || opts.headed;
+    let adapterPath: string | null = null;
+    let playwrightAdapter: any = null;
+
+    if (useBrowser) {
+      // Playwright browser mode — NPCs browse the real UI
+      let PlaywrightAdapter: any;
+      try {
+        ({ PlaywrightAdapter } = await import('./adapters/PlaywrightAdapter.js'));
+      } catch {
+        console.log(chalk.red('  ✗ Playwright is required for browser mode.\n'));
+        console.log(chalk.dim('  Install it:\n'));
+        console.log(chalk.white('    npm install playwright'));
+        console.log(chalk.white('    npx playwright install chromium\n'));
+        process.exit(1);
+      }
+      playwrightAdapter = new PlaywrightAdapter({
+        baseUrl: opts.url!,
+        headless: !opts.headed,
+        screenshotDir: resolve(join(tmpDir, 'screenshots')),
+        slowMo: opts.headed ? 100 : 0,
+      });
+      console.log(chalk.cyan(`  🌐 Browser mode${opts.headed ? ' (headed)' : ' (headless)'}\n`));
+    } else if (opts.adapter) {
       adapterPath = resolve(opts.adapter);
       const adapterConfig = JSON.parse(readFileSync(adapterPath, 'utf-8'));
       const actionCount = adapterConfig.actions?.length ?? 0;
@@ -467,8 +500,14 @@ members:
 
     // Step 3: Run simulation
     const provider = await createProvider({ type: opts.provider, model: opts.model });
-    const adapterConfig = JSON.parse(readFileSync(adapterPath, 'utf-8'));
-    const adapter = new HttpApiAdapter(adapterConfig);
+
+    let adapter;
+    if (playwrightAdapter) {
+      adapter = playwrightAdapter;
+    } else {
+      const adapterConfig = JSON.parse(readFileSync(adapterPath!, 'utf-8'));
+      adapter = new HttpApiAdapter(adapterConfig);
+    }
 
     const engine = new SimulationEngine({
       families: [familyPath],
@@ -497,10 +536,13 @@ members:
 
     // Bug exporter for roast — register adapter actions for category mapping
     const bugExporter = new BugExporter();
-    if (adapterConfig.actions) {
-      bugExporter.registerActions(adapterConfig.actions.map((a: any) => ({
-        name: a.name, category: a.category, path: a.path,
-      })));
+    if (adapterPath) {
+      const adapterConf = JSON.parse(readFileSync(adapterPath, 'utf-8'));
+      if (adapterConf.actions) {
+        bugExporter.registerActions(adapterConf.actions.map((a: any) => ({
+          name: a.name, category: a.category, path: a.path,
+        })));
+      }
     }
     engine.on((event) => {
       if (event.type === 'action:after') bugExporter.recordAction(event.log);
@@ -521,6 +563,8 @@ members:
       console.log(chalk.magenta(`  🐛 ${bugs.length} bug(s) found → ${bugsPath}`));
       console.log(chalk.dim(`     Feed to your bug tracker: truman run --export-bugs bugs.json\n`));
     }
+
+    if (playwrightAdapter) await playwrightAdapter.close();
 
     console.log(chalk.red.bold('\n  🔥 Roast complete. Fix your app.\n'));
   });

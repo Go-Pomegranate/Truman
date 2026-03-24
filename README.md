@@ -16,6 +16,7 @@
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.6+-blue?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>
   <a href="https://github.com/Go-Pomegranate/Truman/actions"><img src="https://img.shields.io/github/actions/workflow/status/Go-Pomegranate/Truman/ci.yml?style=flat-square&label=CI" alt="CI" /></a>
   <a href="https://github.com/Go-Pomegranate/Truman/stargazers"><img src="https://img.shields.io/github/stars/Go-Pomegranate/Truman?style=flat-square" alt="GitHub stars" /></a>
+  <a href="https://discord.gg/wz25vvfdE3"><img src="https://img.shields.io/discord/1485971788822351945?style=flat-square&logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Discord" /></a>
 </p>
 
 ---
@@ -187,7 +188,7 @@ Built by the team behind [ParentOS](https://github.com/Go-Pomegranate) — where
 <strong>Your app isn't hard to use.</strong><br/>
 You're just the only one who knows where everything is.<br/><br/>
 <code>npx @parentos/truman roast</code><br/><br/>
-<a href="https://github.com/Go-Pomegranate/Truman">Star it</a> · <a href="https://github.com/Go-Pomegranate/Truman/issues">Report a bug</a> · <a href="CONTRIBUTING.md">Contribute</a>
+<a href="https://github.com/Go-Pomegranate/Truman">Star it</a> · <a href="https://discord.gg/wz25vvfdE3">Join Discord</a> · <a href="https://github.com/Go-Pomegranate/Truman/issues">Report a bug</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 ---
