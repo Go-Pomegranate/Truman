@@ -38,6 +38,7 @@ export class DecisionEngine {
 
     const decision = await this.provider.decide(prompt, {
       temperature: this.getTemperature(opts.member),
+      screenshot: opts.appState.screenshot,
     });
 
     // Validate the chosen action exists

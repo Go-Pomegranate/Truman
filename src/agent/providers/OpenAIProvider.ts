@@ -22,6 +22,24 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async decide(prompt: string, options?: DecisionOptions): Promise<Decision> {
+    // Build user message — multimodal if screenshot provided
+    let userContent: any = prompt;
+    if (options?.screenshot) {
+      userContent = [
+        {
+          type: 'text',
+          text: prompt,
+        },
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:image/jpeg;base64,${options.screenshot}`,
+            detail: 'low',
+          },
+        },
+      ];
+    }
+
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -36,9 +54,10 @@ export class OpenAIProvider implements LLMProvider {
             content:
               'You are a persona simulator. You role-play as a specific person using an app. ' +
               'Always respond with valid JSON matching the requested format. ' +
-              'Stay in character. Be realistic, not robotic.',
+              'Stay in character. Be realistic, not robotic.' +
+              (options?.screenshot ? ' You can see a screenshot of the current page — use it to understand the layout and UI.' : ''),
           },
-          { role: 'user', content: prompt },
+          { role: 'user', content: userContent },
         ],
         temperature: options?.temperature ?? this.defaultTemp,
         max_tokens: options?.maxTokens ?? this.defaultMaxTokens,

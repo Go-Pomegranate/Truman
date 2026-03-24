@@ -21,6 +21,8 @@ export interface PlaywrightAdapterConfig {
   headless?: boolean;
   screenshotDir?: string;
   slowMo?: number;
+  /** Send screenshots to LLM for visual understanding */
+  vision?: boolean;
 }
 
 // ─── Internal types ─────────────────────────────────────────────
@@ -239,9 +241,19 @@ export class PlaywrightAdapter implements AppAdapter {
       if (errors.length) summary += `Alerts: ${errors.join('; ')}\n\n`;
       summary += `Visible content:\n${a11y}`;
 
+      // Capture screenshot as base64 for vision mode
+      let screenshot: string | undefined;
+      if (this.config.vision) {
+        try {
+          const buf = await page.screenshot({ fullPage: false, type: 'jpeg', quality: 60 });
+          screenshot = buf.toString('base64');
+        } catch { /* ignore */ }
+      }
+
       return {
         summary: summary.slice(0, MAX_SUMMARY_LEN),
         data: { url, title },
+        screenshot,
       };
     } catch {
       return { summary: 'Could not read page', data: {} };

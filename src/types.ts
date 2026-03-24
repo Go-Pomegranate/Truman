@@ -144,6 +144,8 @@ export interface AppState {
   summary: string;
   /** Structured data for programmatic access */
   data: Record<string, unknown>;
+  /** Base64 PNG screenshot for vision mode */
+  screenshot?: string;
 }
 
 // ─── LLM Provider ───────────────────────────────────────────────────
@@ -157,6 +159,8 @@ export interface LLMProvider {
 export interface DecisionOptions {
   temperature?: number;
   maxTokens?: number;
+  /** Base64 PNG screenshot of current page (for vision-capable models) */
+  screenshot?: string;
   /** JSON schema the response must follow */
   responseSchema?: Record<string, unknown>;
 }

@@ -383,6 +383,7 @@ program
   .option('--voice [backend]', 'Enable voice narration (default: auto)', 'auto')
   .option('--api', 'Use HTTP API probing instead of browser (for REST APIs / localhost)')
   .option('--headless', 'Run browser without visible window')
+  .option('--vision', 'Send screenshots to LLM — NPCs see the page visually (uses more tokens)')
   .option('--fresh', 'Clear state from previous roasts (NPCs forget everything)')
   .action(async (opts) => {
     // --target is an alias for --url
@@ -437,8 +438,11 @@ program
         headless: !!opts.headless,
         screenshotDir: resolve(join(tmpDir, 'screenshots')),
         slowMo: opts.headless ? 0 : 100,
+        vision: !!opts.vision,
       });
-      console.log(chalk.cyan(`  🌐 Browser mode${opts.headless ? ' (headless)' : ' — watch your NPCs roast your app live'}\n`));
+      console.log(chalk.cyan(`  🌐 Browser mode${opts.headless ? ' (headless)' : ' — watch your NPCs roast your app live'}`));
+      if (opts.vision) console.log(chalk.magenta('  👁️  Vision ON — NPCs can see the page layout'));
+      console.log('');
     } else if (opts.adapter) {
       adapterPath = resolve(opts.adapter);
       const adapterConfig = JSON.parse(readFileSync(adapterPath, 'utf-8'));
