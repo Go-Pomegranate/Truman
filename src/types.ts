@@ -65,6 +65,8 @@ export interface SimulationConfig {
   tickInterval?: number;
   /** Max concurrent member sessions */
   concurrency?: number;
+  /** Max actions per NPC session (default: 10) */
+  maxActionsPerSession?: number;
   /** Hook called before each action — return false to skip */
   beforeAction?: (ctx: { auth: AuthContext; family: FamilyConfig; member: MemberConfig }) => Promise<boolean>;
   /** Hook called after each action */

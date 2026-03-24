@@ -204,7 +204,8 @@ export class SimulationEngine {
     let actionCount = 0, sessionFrustration = 0, wantsToContinue = true;
     const sessionHistory: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string; goal?: string }[] = [];
 
-    while (wantsToContinue && actionCount < MAX_ACTIONS_PER_SESSION && this.running) {
+    const maxActions = this.config.maxActionsPerSession ?? MAX_ACTIONS_PER_SESSION;
+    while (wantsToContinue && actionCount < maxActions && this.running) {
       const [allActions, appState] = await Promise.all([
         this.config.adapter.getAvailableActions(ctx),
         this.config.adapter.getAppState(ctx),

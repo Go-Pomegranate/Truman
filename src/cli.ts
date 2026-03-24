@@ -557,6 +557,7 @@ members:
       speed: 1,
       logDir: join(tmpDir, 'logs'),
       stateDir: join(tmpDir, 'state'),
+      maxActionsPerSession: 25,
     });
 
     // Voice narration
