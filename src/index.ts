@@ -25,6 +25,9 @@ export { HttpApiAdapter } from './adapters/HttpApiAdapter.js';
 // Observer
 export { ActionLogger } from './observer/ActionLogger.js';
 export { VoiceNarrator } from './observer/VoiceNarrator.js';
+export { SessionRecorder } from './observer/SessionRecorder.js';
+export { BugExporter } from './observer/BugExporter.js';
+export type { BugReport } from './observer/BugExporter.js';
 
 // Types — re-export everything for consumers
 export type {

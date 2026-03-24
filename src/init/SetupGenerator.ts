@@ -144,12 +144,12 @@ export class SetupGenerator {
 
   private async probeEndpoints(baseUrl: string): Promise<GeneratedAction[]> {
     const probes = [
-      { path: '/api/health', cat: 'system' }, { path: '/api/users', cat: 'users' },
-      { path: '/api/users/me', cat: 'users' }, { path: '/api/tasks', cat: 'tasks' },
-      { path: '/api/events', cat: 'calendar' }, { path: '/api/calendar', cat: 'calendar' },
-      { path: '/api/products', cat: 'products' }, { path: '/api/orders', cat: 'orders' },
-      { path: '/api/items', cat: 'items' }, { path: '/api/posts', cat: 'content' },
-      { path: '/api/messages', cat: 'messaging' }, { path: '/api/notifications', cat: 'notifications' },
+      { path: '/health', cat: 'system' }, { path: '/users', cat: 'users' },
+      { path: '/users/me', cat: 'users' }, { path: '/tasks', cat: 'tasks' },
+      { path: '/events', cat: 'calendar' }, { path: '/calendar', cat: 'calendar' },
+      { path: '/products', cat: 'products' }, { path: '/orders', cat: 'orders' },
+      { path: '/items', cat: 'items' }, { path: '/posts', cat: 'content' },
+      { path: '/messages', cat: 'messaging' }, { path: '/notifications', cat: 'notifications' },
     ];
 
     const actions: GeneratedAction[] = [];

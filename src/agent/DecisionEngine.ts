@@ -82,6 +82,7 @@ Respond with JSON:
 {
   "action": "action_name or none",
   "reasoning": "what you're thinking",
+  "thought": "short UX reaction, max 10 words, like inner monologue",
   "params": { ... },
   "mood": "your mood now",
   "frustration": 0.0-1.0,

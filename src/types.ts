@@ -170,6 +170,8 @@ export interface Decision {
   params: Record<string, unknown>;
   /** Current emotional state of the persona */
   mood?: string;
+  /** Short inner thought about the UX — what the persona actually thinks (max 10 words) */
+  thought?: string;
   /** Frustration level 0-1 (may trigger session abort) */
   frustration?: number;
   /** Whether the persona wants to continue or stop */

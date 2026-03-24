@@ -1,187 +1,133 @@
-import { execFile } from 'node:child_process';
+import { execFile, exec, execFileSync } from 'node:child_process';
 import { platform } from 'node:os';
 import type { EngineEvent, MemberRole } from '../types.js';
 
-// ─── Voice profiles per role ────────────────────────────────────────
-// macOS voices chosen for maximum personality contrast
+// ─── TTS Backend types ──────────────────────────────────────────────
 
-const VOICE_PROFILES: Record<MemberRole, MacVoice> = {
-  parent: { voice: 'Samantha', rate: 180 },
-  teen: { voice: 'Junior', rate: 220 },
-  child: { voice: 'Bubbles', rate: 160 },
-  grandparent: { voice: 'Grandma (English (US))', rate: 140 },
-};
+export type TTSBackend = 'auto' | 'say' | 'piper' | 'edge' | 'espeak';
 
-// Fallback voices for when roles don't match
-const VOICE_POOL: MacVoice[] = [
-  { voice: 'Daniel', rate: 180 },
-  { voice: 'Shelley (English (US))', rate: 190 },
-  { voice: 'Fred', rate: 170 },
-  { voice: 'Flo (English (US))', rate: 185 },
-];
+interface TTSConfig {
+  backend: TTSBackend;
+  piperModel?: string;
+}
 
-interface MacVoice {
-  voice: string;
+// ─── Voice profiles ─────────────────────────────────────────────────
+
+interface VoiceProfile {
+  say: string;
+  edge: string;
+  espeak: string;
+  piper: string;
   rate: number;
+  /** Label for logging */
+  label: string;
 }
 
-// ─── Reaction lines by frustration level ────────────────────────────
-
-interface ReactionLine {
-  minFrustration: number;
-  maxFrustration: number;
-  lines: string[];
-}
-
-const PARENT_REACTIONS: ReactionLine[] = [
-  { minFrustration: 0, maxFrustration: 0.2, lines: [
-    'Okay, that worked.',
-    'Nice. Moving on.',
-    'Good, good.',
-  ]},
-  { minFrustration: 0.2, maxFrustration: 0.5, lines: [
-    'Hmm, that took longer than I expected.',
-    'Wait, where did that button go?',
-    'This should be easier.',
-    'I don\'t have time for this.',
-  ]},
-  { minFrustration: 0.5, maxFrustration: 0.8, lines: [
-    'Seriously? Again?',
-    'This is really testing my patience.',
-    'I have three kids and zero time for this.',
-    'Why is this so complicated?',
-  ]},
-  { minFrustration: 0.8, maxFrustration: 1.0, lines: [
-    'I\'m done. I\'m actually done.',
-    'Life is too short for this app.',
-    'I\'m going back to pen and paper.',
-    'Uninstalling. Goodbye.',
-  ]},
+// Full voice pool — every NPC gets a unique voice
+const VOICE_POOL: VoiceProfile[] = [
+  { label: 'Jenny',       say: 'Samantha',                  edge: 'en-US-JennyNeural',              espeak: 'en-us+f3', piper: '0', rate: 180 },
+  { label: 'Andrew',      say: 'Daniel',                    edge: 'en-US-AndrewNeural',             espeak: 'en-us+m1', piper: '1', rate: 175 },
+  { label: 'Ava',         say: 'Shelley (English (US))',    edge: 'en-US-AvaNeural',                espeak: 'en-us+f2', piper: '2', rate: 185 },
+  { label: 'Brian',       say: 'Junior',                    edge: 'en-US-BrianNeural',              espeak: 'en-us+m3', piper: '3', rate: 195 },
+  { label: 'Emma',        say: 'Flo (English (US))',        edge: 'en-US-EmmaNeural',               espeak: 'en-us+f4', piper: '4', rate: 190 },
+  { label: 'Guy',         say: 'Fred',                      edge: 'en-US-GuyNeural',                espeak: 'en-us+m2', piper: '5', rate: 180 },
+  { label: 'Ana',         say: 'Bubbles',                   edge: 'en-US-AnaNeural',                espeak: 'en-us+f5', piper: '6', rate: 160 },
+  { label: 'Christopher', say: 'Ralph',                     edge: 'en-US-ChristopherNeural',        espeak: 'en-us+m4', piper: '7', rate: 165 },
+  { label: 'Aria',        say: 'Samantha',                  edge: 'en-US-AriaNeural',               espeak: 'en-us+f1', piper: '8', rate: 180 },
+  { label: 'Roger',       say: 'Albert',                    edge: 'en-US-RogerNeural',              espeak: 'en-us+m5', piper: '9', rate: 185 },
+  { label: 'Michelle',    say: 'Kathy',                     edge: 'en-US-MichelleNeural',           espeak: 'en-us+f6', piper: '10', rate: 175 },
+  { label: 'Eric',        say: 'Fred',                      edge: 'en-US-EricNeural',               espeak: 'en-us+m6', piper: '11', rate: 170 },
+  { label: 'Steffan',     say: 'Daniel',                    edge: 'en-US-SteffanNeural',            espeak: 'en-us+m7', piper: '12', rate: 180 },
+  { label: 'Ryan (UK)',   say: 'Daniel',                    edge: 'en-GB-RyanNeural',               espeak: 'en-gb+m1', piper: '13', rate: 175 },
+  { label: 'Sonia (UK)',  say: 'Shelley (English (US))',    edge: 'en-GB-SoniaNeural',              espeak: 'en-gb+f1', piper: '14', rate: 180 },
+  { label: 'Libby (UK)',  say: 'Flo (English (US))',        edge: 'en-GB-LibbyNeural',              espeak: 'en-gb+f2', piper: '15', rate: 185 },
+  { label: 'Natasha (AU)',say: 'Kathy',                     edge: 'en-AU-NatashaNeural',            espeak: 'en-us+f7', piper: '16', rate: 180 },
 ];
 
-const TEEN_REACTIONS: ReactionLine[] = [
-  { minFrustration: 0, maxFrustration: 0.1, lines: [
-    'Whatever.',
-    'K.',
-    'Fine.',
-  ]},
-  { minFrustration: 0.1, maxFrustration: 0.3, lines: [
-    'This app is mid.',
-    'Bruh.',
-    'It\'s giving... nothing.',
-    'Can I close this now?',
-  ]},
-  { minFrustration: 0.3, maxFrustration: 0.6, lines: [
-    'Oh my god, this is so slow.',
-    'My grandma could code a better app.',
-    'I literally cannot.',
-    'This is why nobody uses this.',
-  ]},
-  { minFrustration: 0.6, maxFrustration: 1.0, lines: [
-    'I\'m out. Bye.',
-    'Nope. Nope nope nope.',
-    'Deleting this trash.',
-    'Back to TikTok.',
-  ]},
-];
-
-const CHILD_REACTIONS: ReactionLine[] = [
-  { minFrustration: 0, maxFrustration: 0.2, lines: [
-    'Yay! It worked!',
-    'Ooh, what does this button do?',
-    'Cool!',
-  ]},
-  { minFrustration: 0.2, maxFrustration: 0.5, lines: [
-    'Mommy? It\'s not working.',
-    'I don\'t get it.',
-    'Where did it go?',
-    'Huh?',
-  ]},
-  { minFrustration: 0.5, maxFrustration: 0.8, lines: [
-    'I don\'t like this anymore.',
-    'This is boring.',
-    'It\'s broken again!',
-  ]},
-  { minFrustration: 0.8, maxFrustration: 1.0, lines: [
-    'I want my iPad back!',
-    'This app is stupid!',
-    'Mooooom!',
-  ]},
-];
-
-const GRANDPARENT_REACTIONS: ReactionLine[] = [
-  { minFrustration: 0, maxFrustration: 0.3, lines: [
-    'Oh, would you look at that.',
-    'Well, isn\'t that nice.',
-    'My grandchildren set this up for me.',
-  ]},
-  { minFrustration: 0.3, maxFrustration: 0.6, lines: [
-    'Now where did everything go?',
-    'I think I pressed the wrong thing.',
-    'Back in my day, we used paper.',
-    'Can someone help me with this?',
-  ]},
-  { minFrustration: 0.6, maxFrustration: 1.0, lines: [
-    'I give up. I\'ll call them instead.',
-    'These computers will be the death of me.',
-    'I\'ll just wait for my grandson to fix it.',
-  ]},
-];
-
-const ROLE_REACTIONS: Record<MemberRole, ReactionLine[]> = {
-  parent: PARENT_REACTIONS,
-  teen: TEEN_REACTIONS,
-  child: CHILD_REACTIONS,
-  grandparent: GRANDPARENT_REACTIONS,
+// Role-preferred voices — used as first picks, then round-robin from pool
+const ROLE_PREFERRED: Record<MemberRole, string[]> = {
+  parent: ['Jenny', 'Andrew', 'Ava', 'Guy', 'Michelle', 'Christopher'],
+  teen: ['Brian', 'Emma', 'Roger', 'Steffan'],
+  child: ['Ana', 'Libby (UK)'],
+  grandparent: ['Christopher', 'Aria', 'Sonia (UK)', 'Natasha (AU)'],
 };
 
-// ─── Special event lines ────────────────────────────────────────────
+// Narrator voice — system announcements
+const NARRATOR_VOICE: VoiceProfile = {
+  label: 'Narrator', say: 'Bad News', edge: 'en-US-EricNeural', espeak: 'en-us+m1', piper: '0', rate: 160,
+};
 
-const SIMULATION_START_LINES = [
-  'Alright, let\'s see what this app is about.',
-  'Opening the app. Here we go.',
-  'Day one. Let\'s do this.',
-];
+// ─── Member tracking ────────────────────────────────────────────────
 
-const BUG_FOUND_LINES = [
-  'Well that\'s broken.',
-  'Error. Lovely.',
-  'That... was not supposed to happen.',
-  'Found a bug. You\'re welcome.',
-];
-
-const SCENARIO_PASS_LINES = [
-  'Mission accomplished.',
-  'That actually worked. Impressive.',
-  'Nailed it.',
-];
-
-const SCENARIO_FAIL_LINES = [
-  'Mission failed. We\'ll get \'em next time.',
-  'That did not go as planned.',
-  'Yeah, no. That\'s broken.',
-];
+interface MemberInfo {
+  id: string;
+  name: string;
+  role: MemberRole;
+  persona: string;
+  voice: VoiceProfile;
+}
 
 // ─── Voice Narrator ─────────────────────────────────────────────────
 
 export class VoiceNarrator {
-  private memberVoices = new Map<string, MacVoice>();
-  private voicePoolIdx = 0;
+  private members = new Map<string, MemberInfo>();
+  private usedVoiceLabels = new Set<string>();
+  private poolIdx = 0;
   private speaking = false;
-  private queue: Array<{ text: string; voice: MacVoice }> = [];
+  private queue: Array<{ text: string; voice: VoiceProfile }> = [];
+  private concurrent = false; // soundscape mode — multiple voices at once
   private enabled: boolean;
+  private backend: TTSBackend;
+  private piperModel: string | null;
 
-  constructor(enabled = true) {
-    this.enabled = enabled && platform() === 'darwin';
-    if (!this.enabled && enabled) {
-      console.warn('[truman] Voice narration requires macOS. Falling back to silent mode.');
+  constructor(options: { enabled?: boolean; tts?: TTSConfig; soundscape?: boolean } = {}) {
+    this.piperModel = options.tts?.piperModel ?? null;
+    this.backend = this.resolveBackend(options.tts?.backend ?? 'auto');
+    this.enabled = (options.enabled ?? true) && this.backend !== 'auto';
+    this.concurrent = options.soundscape ?? false;
+
+    if (this.enabled) {
+      console.log(`[truman] TTS backend: ${this.backend} (${VOICE_POOL.length} voices available)`);
+    } else if (options.enabled) {
+      console.warn('[truman] No TTS backend found. Install: edge-tts (pip), say (macOS), espeak-ng, or piper');
     }
   }
 
-  assignVoice(memberId: string, role: MemberRole): void {
-    if (this.memberVoices.has(memberId)) return;
-    const profile = VOICE_PROFILES[role] ?? VOICE_POOL[this.voicePoolIdx++ % VOICE_POOL.length];
-    this.memberVoices.set(memberId, profile);
+  registerMember(id: string, name: string, role: MemberRole, persona: string): void {
+    if (this.members.has(id)) return;
+    const voice = this.pickVoice(role);
+    this.members.set(id, { id, name, role, persona, voice });
+  }
+
+  /** Pick a unique voice — prefer role-appropriate voices, then round-robin */
+  private pickVoice(role: MemberRole): VoiceProfile {
+    // Try role-preferred voices first
+    const preferred = ROLE_PREFERRED[role] ?? [];
+    for (const label of preferred) {
+      if (!this.usedVoiceLabels.has(label)) {
+        const voice = VOICE_POOL.find((v) => v.label === label);
+        if (voice) {
+          this.usedVoiceLabels.add(label);
+          return voice;
+        }
+      }
+    }
+
+    // Fall back to round-robin from full pool
+    for (let i = 0; i < VOICE_POOL.length; i++) {
+      const idx = (this.poolIdx + i) % VOICE_POOL.length;
+      const voice = VOICE_POOL[idx];
+      if (!this.usedVoiceLabels.has(voice.label)) {
+        this.usedVoiceLabels.add(voice.label);
+        this.poolIdx = idx + 1;
+        return voice;
+      }
+    }
+
+    // All voices used — start reusing (17+ NPCs)
+    const voice = VOICE_POOL[this.poolIdx % VOICE_POOL.length];
+    this.poolIdx++;
+    return voice;
   }
 
   async handleEvent(event: EngineEvent): Promise<void> {
@@ -189,105 +135,163 @@ export class VoiceNarrator {
 
     switch (event.type) {
       case 'simulation:start':
-        this.speak(pick(SIMULATION_START_LINES), VOICE_PROFILES.parent);
+        this.speak('Simulation starting. Let\'s see how they handle this.', NARRATOR_VOICE);
         break;
-
-      case 'session:start': {
-        const voice = this.memberVoices.get(event.memberId);
-        if (voice) this.speak('Let me check the app.', voice);
-        break;
-      }
 
       case 'action:after': {
         const { log } = event;
-        const voice = this.memberVoices.get(log.memberId);
-        if (!voice) break;
+        const member = this.members.get(log.memberId);
+        if (!member) break;
 
-        const role = log.memberRole;
         const frustration = log.decision.frustration ?? log.sessionFrustration;
-        const reactions = ROLE_REACTIONS[role] ?? PARENT_REACTIONS;
+        const shouldSpeak = !log.result.success || frustration > 0.5 || Math.random() < 0.25;
+        if (!shouldSpeak) break;
 
-        // Don't narrate every action — only on notable moments
-        if (!log.result.success) {
-          this.speak(pick(BUG_FOUND_LINES), voice);
-        } else if (frustration > 0.3 || Math.random() < 0.3) {
-          const line = pickReaction(reactions, frustration);
-          if (line) this.speak(line, voice);
-        }
-        break;
-      }
-
-      case 'issue:detected': {
-        const voice = this.memberVoices.get(event.memberId);
-        if (voice) this.speak(pick(BUG_FOUND_LINES), voice);
+        const line = this.extractLine(member, {
+          success: log.result.success,
+          frustration,
+          thought: log.decision.thought,
+          reasoning: log.decision.reasoning,
+        });
+        this.speak(line, member.voice);
         break;
       }
 
       case 'member:frustrated': {
-        const voice = this.memberVoices.get(event.memberId);
-        const role = [...this.memberVoices.entries()]
-          .find(([id]) => id === event.memberId);
-        if (voice) {
-          // Rage quit line — high frustration
-          const reactions = ROLE_REACTIONS.teen; // rage quit is universal teen energy
-          const line = pickReaction(reactions, event.level);
-          if (line) this.speak(line, voice);
-        }
+        const member = this.members.get(event.memberId);
+        if (!member) break;
+        this.speak(
+          this.extractLine(member, { success: false, frustration: event.level, reasoning: 'I can\'t take this anymore.' }),
+          member.voice,
+        );
         break;
       }
 
       case 'scenario:end':
-        if (event.result.success) {
-          this.speak(pick(SCENARIO_PASS_LINES), VOICE_PROFILES.parent);
-        } else {
-          this.speak(pick(SCENARIO_FAIL_LINES), { voice: 'Bad News', rate: 160 });
-        }
+        this.speak(event.result.success ? 'Scenario passed.' : 'Scenario failed.', NARRATOR_VOICE);
         break;
 
       case 'simulation:stop':
-        this.speak('Simulation complete. Check the report.', VOICE_PROFILES.parent);
+        this.speak('Simulation complete.', NARRATOR_VOICE);
         break;
     }
   }
 
-  private speak(text: string, voice: MacVoice): void {
-    this.queue.push({ text, voice });
-    if (!this.speaking) this.processQueue();
+  // ─── Extract spoken line ──────────────────────────────────────────
+
+  private extractLine(
+    _member: MemberInfo,
+    ctx: { success: boolean; frustration: number; thought?: string; reasoning: string },
+  ): string {
+    // Priority 1: thought — short UX inner monologue from LLM
+    const t = ctx.thought;
+    if (t && t.length > 3 && t.length < 100) return t;
+
+    // Priority 2: first sentence of reasoning
+    const r = ctx.reasoning;
+    if (r && r.length > 5) {
+      const first = r.split(/[.!?]/)[0]?.trim();
+      if (first && first.length > 5 && first.length < 80) return first;
+    }
+
+    if (!ctx.success) return `That didn't work.`;
+    if (ctx.frustration > 0.7) return `I'm losing patience.`;
+    return `Okay.`;
+  }
+
+  // ─── TTS dispatch ─────────────────────────────────────────────────
+
+  private speak(text: string, voice: VoiceProfile): void {
+    if (this.concurrent) {
+      // Soundscape mode — fire immediately, voices overlap
+      this.playTTS(text, voice).catch(() => {});
+    } else {
+      this.queue.push({ text, voice });
+      if (!this.speaking) this.processQueue();
+    }
   }
 
   private async processQueue(): Promise<void> {
-    if (this.queue.length === 0) {
-      this.speaking = false;
-      return;
-    }
-
+    if (this.queue.length === 0) { this.speaking = false; return; }
     this.speaking = true;
     const { text, voice } = this.queue.shift()!;
-
-    await new Promise<void>((resolve) => {
-      execFile('say', ['-v', voice.voice, '-r', String(voice.rate), text], (err) => {
-        if (err) {
-          // Voice not available — try fallback
-          execFile('say', ['-r', String(voice.rate), text], () => resolve());
-        } else {
-          resolve();
-        }
-      });
-    });
-
+    await this.playTTS(text, voice);
     this.processQueue();
   }
-}
 
-// ─── Helpers ────────────────────────────────────────────────────────
+  private async playTTS(text: string, voice: VoiceProfile): Promise<void> {
+    try {
+      switch (this.backend) {
+        case 'say': await this.ttsSay(text, voice); break;
+        case 'piper': await this.ttsPiper(text, voice); break;
+        case 'edge': await this.ttsEdge(text, voice); break;
+        case 'espeak': await this.ttsEspeak(text, voice); break;
+      }
+    } catch { /* TTS failed — skip silently */ }
+  }
 
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
+  // ─── Backend: macOS say ───────────────────────────────────────────
 
-function pickReaction(reactions: ReactionLine[], frustration: number): string | null {
-  const matching = reactions.find(
-    (r) => frustration >= r.minFrustration && frustration < r.maxFrustration,
-  );
-  return matching ? pick(matching.lines) : null;
+  private ttsSay(text: string, voice: VoiceProfile): Promise<void> {
+    return new Promise((resolve) => {
+      execFile('say', ['-v', voice.say, '-r', String(voice.rate), text], (err) => {
+        if (err) execFile('say', ['-r', String(voice.rate), text], () => resolve());
+        else resolve();
+      });
+    });
+  }
+
+  // ─── Backend: Piper ───────────────────────────────────────────────
+
+  private ttsPiper(text: string, _voice: VoiceProfile): Promise<void> {
+    return new Promise((resolve) => {
+      const model = this.piperModel ?? 'en_US-lessac-medium';
+      const playCmd = platform() === 'darwin'
+        ? `echo "${text.replace(/"/g, '\\"')}" | piper --model ${model} --output_raw | play -r 22050 -e signed -b 16 -c 1 -t raw - 2>/dev/null`
+        : `echo "${text.replace(/"/g, '\\"')}" | piper --model ${model} --output_raw | aplay -r 22050 -f S16_LE -c 1 -t raw 2>/dev/null`;
+      exec(playCmd, () => resolve());
+    });
+  }
+
+  // ─── Backend: edge-tts ────────────────────────────────────────────
+
+  private ttsEdge(text: string, voice: VoiceProfile): Promise<void> {
+    return new Promise((resolve) => {
+      const escaped = text.replace(/"/g, '\\"').replace(/'/g, "\\'");
+      const tmpFile = `/tmp/truman-tts-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.mp3`;
+      exec(
+        `edge-tts --voice "${voice.edge}" --rate "+${Math.max(0, voice.rate - 150)}%" --text "${escaped}" --write-media ${tmpFile} && afplay ${tmpFile} 2>/dev/null || mpv --no-video ${tmpFile} 2>/dev/null || play ${tmpFile} 2>/dev/null; rm -f ${tmpFile}`,
+        () => resolve(),
+      );
+    });
+  }
+
+  // ─── Backend: espeak ──────────────────────────────────────────────
+
+  private ttsEspeak(text: string, voice: VoiceProfile): Promise<void> {
+    return new Promise((resolve) => {
+      execFile('espeak-ng', ['-v', voice.espeak, '-s', String(voice.rate), text], (err) => {
+        if (err) execFile('espeak', ['-v', voice.espeak, '-s', String(voice.rate), text], () => resolve());
+        else resolve();
+      });
+    });
+  }
+
+  // ─── Auto-detect ──────────────────────────────────────────────────
+
+  private resolveBackend(requested: TTSBackend): TTSBackend {
+    if (requested !== 'auto') return requested;
+    if (this.commandExists('edge-tts')) return 'edge';
+    if (platform() === 'darwin') return 'say';
+    if (this.commandExists('piper')) return 'piper';
+    if (this.commandExists('espeak-ng') || this.commandExists('espeak')) return 'espeak';
+    return 'auto';
+  }
+
+  private commandExists(cmd: string): boolean {
+    try {
+      execFileSync('which', [cmd], { stdio: 'ignore' });
+      return true;
+    } catch { return false; }
+  }
 }

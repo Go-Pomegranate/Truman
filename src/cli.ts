@@ -11,6 +11,8 @@ import { createProvider } from './agent/providers/types.js';
 import { LiveDashboard } from './observer/LiveDashboard.js';
 import { writeJUnitReport } from './observer/JUnitReporter.js';
 import { VoiceNarrator } from './observer/VoiceNarrator.js';
+import { SessionRecorder } from './observer/SessionRecorder.js';
+import { BugExporter } from './observer/BugExporter.js';
 import { loadFamilies } from './family/FamilyLoader.js';
 import type { EngineEvent, SimulationConfig } from './types.js';
 
@@ -41,10 +43,31 @@ program
   .option('--browser', 'Use Playwright browser adapter (NPC navigates real UI)')
   .option('--headed', 'Show browser window (implies --browser)')
   .option('--stress', 'Stress test: all NPC members run in parallel (concurrent API load)')
-  .option('--voice', 'Enable voice narration — NPCs speak their frustrations (macOS)')
+  .option('--voice [backend]', 'Enable voice narration (auto, say, piper, edge, espeak)')
+  .option('--piper-model <path>', 'Piper model name/path (default: en_US-lessac-medium)')
+  .option('--record <path>', 'Record terminal session to file (asciinema .cast format)')
+  .option('--soundscape', 'Soundscape mode — voices overlap and build like a crowd')
+  .option('--export <path>', 'Export session as JSON timeline (for web player)')
+  .option('--export-bugs <path>', 'Export found bugs as JSON or Markdown (e.g. bugs.json, bugs.md)')
   .action(async (opts) => {
     console.log(chalk.bold.cyan('\n  🎬 Truman v0.1.0\n'));
     console.log(chalk.dim('  Your app\'s users are fake. They just don\'t know it yet.\n'));
+
+    // Start recording if --record flag is set
+    let recordProcess: import('node:child_process').ChildProcess | null = null;
+    if (opts.record) {
+      const recordPath = resolve(opts.record);
+      try {
+        const { spawn } = await import('node:child_process');
+        // Try asciinema first (produces .cast files, convertable to GIF/SVG)
+        recordProcess = spawn('asciinema', ['rec', '--overwrite', recordPath], {
+          stdio: 'inherit',
+        });
+        console.log(chalk.magenta(`  📹 Recording to ${recordPath}\n`));
+      } catch {
+        console.log(chalk.yellow('  ⚠ asciinema not found — install with: brew install asciinema\n'));
+      }
+    }
 
     let playwrightAdapter: any = null;
     try {
@@ -87,15 +110,42 @@ program
 
       // Wire up voice narration — NPCs speak their frustrations
       if (opts.voice) {
-        const narrator = new VoiceNarrator(true);
+        const backend = typeof opts.voice === 'string' ? opts.voice : 'auto';
+        const narrator = new VoiceNarrator({
+          enabled: true,
+          tts: { backend: backend as any, piperModel: opts.piperModel },
+          soundscape: opts.soundscape ?? false,
+        });
         const families = loadFamilies(opts.families.map((f: string) => resolve(f)));
         for (const family of families) {
           for (const member of family.members) {
-            narrator.assignVoice(member.id, member.role);
+            narrator.registerMember(member.id, member.name, member.role, member.persona);
           }
         }
         engine.on((event) => narrator.handleEvent(event));
         console.log(chalk.magenta('  🎙️  Voice narration ON — NPCs will speak their minds.\n'));
+      }
+
+      // Bug exporter — collect action logs for rich bug reports
+      // Bug exporter — collect action logs for rich bug reports
+      const bugExporter = new BugExporter();
+      if (!useBrowser && adapter instanceof HttpApiAdapter) {
+        const adapterConf = await loadAdapterConfig(opts.adapter);
+        if (adapterConf.actions) {
+          bugExporter.registerActions(adapterConf.actions.map((a: any) => ({
+            name: a.name, category: a.category, path: a.path,
+          })));
+        }
+      }
+      engine.on((event) => {
+        if (event.type === 'action:after') bugExporter.recordAction(event.log);
+      });
+
+      // Export session as JSON timeline for web player
+      if (opts.export) {
+        const recorder = new SessionRecorder(resolve(opts.export));
+        engine.on(recorder.handler());
+        console.log(chalk.magenta(`  📼 Recording session to ${opts.export}\n`));
       }
 
       // Wire up event handler — live dashboard or scrolling log
@@ -131,6 +181,15 @@ program
         if (opts.junit) {
           writeJUnitReport(report as any, resolve(opts.junit));
           console.log(chalk.dim(`  JUnit report written to ${opts.junit}\n`));
+        }
+        if (opts.exportBugs) {
+          const bugPath = resolve(opts.exportBugs);
+          const isMarkdown = bugPath.endsWith('.md');
+          const { writeFileSync } = await import('node:fs');
+          const content = isMarkdown ? bugExporter.toMarkdown(report) : bugExporter.toJSON(report);
+          writeFileSync(bugPath, content, 'utf-8');
+          const bugs = bugExporter.export(report);
+          console.log(chalk.magenta(`  🐛 ${bugs.length} bug(s) exported to ${opts.exportBugs}\n`));
         }
         if (useBrowser) {
           const screenshots = resolve('.truman/screenshots');
@@ -285,6 +344,187 @@ program
     console.log(chalk.white('  "Scan my API routes and generate Truman families with realistic scenarios"\n'));
   });
 
+// ─── Roast Command ──────────────────────────────────────────────
+
+program
+  .command('roast')
+  .description('Roast any app — 3 brutal personas, voice narration, one report')
+  .option('--url <baseUrl>', 'Base URL of the app API to roast (auto-probes endpoints)')
+  .option('-a, --adapter <path>', 'Path to existing adapter.json (skips probing)')
+  .option('-p, --provider <type>', 'LLM provider: openai | ollama | anthropic', 'openai')
+  .option('-m, --model <name>', 'LLM model name', 'gpt-4o-mini')
+  .option('--voice [backend]', 'Enable voice narration (default: auto)', 'auto')
+  .action(async (opts) => {
+    if (!opts.url && !opts.adapter) {
+      console.log(chalk.red('  ✗ Provide --url or --adapter\n'));
+      process.exit(1);
+    }
+
+    console.log(chalk.bold.red('\n  🔥 Truman ROAST MODE\n'));
+    console.log(chalk.dim(`  Target: ${opts.url ?? opts.adapter}\n`));
+    console.log(chalk.dim('  Sending 3 brutal personas to judge your app.\n'));
+
+    const tmpDir = resolve('.truman/roast');
+    mkdirSync(tmpDir, { recursive: true });
+
+    // Step 1: Get adapter — use existing or probe
+    let adapterPath: string;
+    if (opts.adapter) {
+      adapterPath = resolve(opts.adapter);
+      const adapterConfig = JSON.parse(readFileSync(adapterPath, 'utf-8'));
+      const actionCount = adapterConfig.actions?.length ?? 0;
+      console.log(chalk.green(`  ✓ Loaded adapter: ${actionCount} actions\n`));
+    } else {
+      const { SetupGenerator } = await import('./init/SetupGenerator.js');
+      const generator = new SetupGenerator();
+      console.log(chalk.dim('  Probing API endpoints...'));
+      const result = await generator.generateFromUrl(opts.url!, tmpDir);
+      if (!result || !result.adapterPath) {
+        console.log(chalk.red('  ✗ Could not find any API endpoints. Is the server running?\n'));
+        process.exit(1);
+      }
+      adapterPath = result.adapterPath;
+      console.log(chalk.green(`  ✓ Found ${result.stats.total} endpoints\n`));
+    }
+
+    // Step 2: Create roast family — 3 personas designed to break things
+    const roastFamily = `
+id: roast-crew
+name: The Roast Crew
+lifestyle: chaotic
+techSavviness: 4
+timezone: America/New_York
+
+members:
+  - id: jaden
+    name: Jaden
+    role: teen
+    age: 19
+    patience: 1
+    techSavviness: 5
+    persona: >
+      Gen Z intern. Mass-closes tabs if anything takes over 2 seconds.
+      Judges every pixel. Will publicly tweet about bad UX.
+      If it doesn't load instantly, it doesn't exist.
+    features: []
+    quirks:
+      - Swipes before the page finishes rendering
+      - Closes app after any delay
+      - "This is giving nothing"
+    schedule:
+      - days: [mon]
+        timeWindow: ["09:00", "09:30"]
+        action: random
+        probability: 1.0
+
+  - id: linda
+    name: Linda
+    role: parent
+    age: 52
+    patience: 4
+    techSavviness: 2
+    persona: >
+      Your mom trying to use your app. Reads every word on screen.
+      Clicks "Learn more" on every tooltip. Still not sure what the app does
+      after 10 minutes. Will call you to ask why it's not working.
+    features: []
+    quirks:
+      - Reads the Terms of Service
+      - Taps the logo expecting it to do something
+      - Asks "is this safe?" before every action
+    schedule:
+      - days: [mon]
+        timeWindow: ["09:00", "09:30"]
+        action: random
+        probability: 1.0
+
+  - id: wei
+    name: Wei
+    role: parent
+    age: 31
+    patience: 5
+    techSavviness: 5
+    persona: >
+      Senior engineer who treats your app like a pentest.
+      Pastes Unicode into every input. Tries SQL injection on the search bar.
+      Opens DevTools before anything else. Files issues in his head.
+    features: []
+    quirks:
+      - Opens DevTools first
+      - Tries edge cases on purpose
+      - Inputs emoji and Unicode in every field
+      - Checks network tab for unnecessary requests
+    schedule:
+      - days: [mon]
+        timeWindow: ["09:00", "09:30"]
+        action: random
+        probability: 1.0
+`;
+
+    const { writeFileSync } = await import('node:fs');
+    const familyPath = join(tmpDir, 'roast-crew.yaml');
+    writeFileSync(familyPath, roastFamily);
+
+    // Step 3: Run simulation
+    const provider = await createProvider({ type: opts.provider, model: opts.model });
+    const adapterConfig = JSON.parse(readFileSync(adapterPath, 'utf-8'));
+    const adapter = new HttpApiAdapter(adapterConfig);
+
+    const engine = new SimulationEngine({
+      families: [familyPath],
+      adapter,
+      llmProvider: provider,
+      speed: 1,
+      logDir: join(tmpDir, 'logs'),
+      stateDir: join(tmpDir, 'state'),
+    });
+
+    // Voice narration
+    if (opts.voice !== false) {
+      const narrator = new VoiceNarrator({
+        enabled: true,
+        tts: { backend: typeof opts.voice === 'string' ? opts.voice as any : 'auto' },
+      });
+      const families = loadFamilies([familyPath]);
+      for (const family of families) {
+        for (const member of family.members) {
+          narrator.registerMember(member.id, member.name, member.role, member.persona);
+        }
+      }
+      engine.on((event) => narrator.handleEvent(event));
+      console.log(chalk.magenta('  🎙️  Voice ON — listen to them judge your app.\n'));
+    }
+
+    // Bug exporter for roast — register adapter actions for category mapping
+    const bugExporter = new BugExporter();
+    if (adapterConfig.actions) {
+      bugExporter.registerActions(adapterConfig.actions.map((a: any) => ({
+        name: a.name, category: a.category, path: a.path,
+      })));
+    }
+    engine.on((event) => {
+      if (event.type === 'action:after') bugExporter.recordAction(event.log);
+    });
+
+    engine.on(createEventLogger());
+
+    await engine.runOnce();
+    const report = engine.generateReport();
+    printReportSummary(report as FullReport, join(tmpDir, 'logs'));
+
+    // Auto-export bugs from roast
+    const bugs = bugExporter.export(report);
+    if (bugs.length > 0) {
+      const bugsPath = join(tmpDir, 'bugs.json');
+      const { writeFileSync } = await import('node:fs');
+      writeFileSync(bugsPath, JSON.stringify(bugs, null, 2), 'utf-8');
+      console.log(chalk.magenta(`  🐛 ${bugs.length} bug(s) found → ${bugsPath}`));
+      console.log(chalk.dim(`     Feed to your bug tracker: truman run --export-bugs bugs.json\n`));
+    }
+
+    console.log(chalk.red.bold('\n  🔥 Roast complete. Fix your app.\n'));
+  });
+
 // ─── Helpers ────────────────────────────────────────────────────
 
 function createEventLogger(): (event: EngineEvent) => void {
@@ -389,7 +629,7 @@ type SessionEntry = {
   familyId: string;
   memberRole: string;
   action: string;
-  decision: { reasoning: string; mood: string; frustration: number };
+  decision: { reasoning: string; mood: string; frustration: number; thought?: string };
   result: { success: boolean; statusCode: number; duration: number };
 };
 
@@ -658,6 +898,36 @@ function printReportSummary(report: FullReport, sessionLogDir?: string): void {
     const emptyStr = emptyTotal > 0 ? `${emptyCreated}/${emptyTotal}` : 'n/a';
     console.log(chalk.cyan(BOX.v) + pad(`    ${chalk.dim('Action correlation:')} ${correlationPct}   ${chalk.dim('Empty → Create:')} ${emptyStr}`, W - 2) + chalk.cyan(BOX.v));
     console.log(chalk.cyan(line(BOX.vr, BOX.vl)));
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // BEST QUOTES — what your synthetic users actually thought
+  // ═══════════════════════════════════════════════════════════════════
+  if (sessions.length > 0) {
+    const quotes = sessions
+      .filter((e) => e.decision.thought && e.decision.thought.length > 5)
+      .map((e) => ({
+        text: e.decision.thought!,
+        name: e.memberName,
+        role: e.memberRole,
+        frustration: e.decision.frustration,
+        success: e.result.success,
+      }))
+      // Prefer frustrated, failed, or funny — sort by frustration desc
+      .sort((a, b) => b.frustration - a.frustration);
+
+    if (quotes.length > 0) {
+      const top = quotes.slice(0, 5);
+      console.log(chalk.cyan(BOX.v) + pad(chalk.bold.white('  💬 WHAT YOUR USERS SAID'), W - 2) + chalk.cyan(BOX.v));
+      for (const q of top) {
+        const icon = q.success ? chalk.dim('·') : chalk.red('✗');
+        const frustBar = q.frustration > 0.6 ? chalk.red('🔥') : q.frustration > 0.3 ? chalk.yellow('😤') : chalk.dim('  ');
+        const truncated = q.text.length > 50 ? q.text.slice(0, 47) + '...' : q.text;
+        console.log(chalk.cyan(BOX.v) + pad(`  ${icon} ${frustBar} ${chalk.italic(`"${truncated}"`)}`, W - 2) + chalk.cyan(BOX.v));
+        console.log(chalk.cyan(BOX.v) + pad(`       ${chalk.dim(`— ${q.name}, ${q.role}`)}`, W - 2) + chalk.cyan(BOX.v));
+      }
+      console.log(chalk.cyan(line(BOX.vr, BOX.vl)));
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════

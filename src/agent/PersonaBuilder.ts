@@ -200,6 +200,7 @@ Respond with a JSON object:
 {
   "action": "action_name",
   "reasoning": "brief explanation of why you chose this, in character",
+  "thought": "what you actually think about the UX right now, max 10 words, like an inner monologue — e.g. 'Why is this button so small?' or 'Nice, that was fast' or 'Three taps for one task, really?'",
   "params": { ... action parameters ... },
   "mood": "your current emotional state (e.g. calm, rushed, annoyed, happy)",
   "frustration": 0.0-1.0,
