@@ -160,19 +160,25 @@ You just opened this app/website for the first time.
 
 STEP 1 (first action only): Look around the page. Read what it says. Figure out what this app IS and what you can do here.
 
-STEP 2 (after your first look): Based on what you see AND your persona, decide on a SPECIFIC GOAL — something a real person would try to accomplish on this site. Examples:
-- If it's a shooting range: "I want to book the 50m range for Saturday at 2pm"
-- If it's a restaurant: "I want to order delivery for tonight"
-- If it's a SaaS app: "I want to set up my first project"
+STEP 2 (after your first look): Decide on a SPECIFIC TRANSACTIONAL GOAL — the main thing this site lets you DO. Your goal MUST involve completing a core user flow, not reading information. Examples:
+- Shooting range site → "Book the 50m range for Saturday at 2pm"
+- Restaurant site → "Order pad thai for delivery tonight"
+- SaaS app → "Create my first project and invite a teammate"
+- E-commerce → "Buy the cheapest wireless headphones"
+
+Your persona affects HOW you pursue the goal (impatient vs careful), NOT what the goal is. Even a cautious person who reads everything still tries to complete a transaction — they just read more along the way.
+
+WRONG goals: "Read the terms of service", "Explore the site", "Understand what this app does" — these are NOT goals, they are procrastination. Pick something ACTIONABLE.
 
 Write your goal in the "goal" field of your response. Then PURSUE IT step by step.
 
-STEP 3+: Work toward your goal. Each action should get you closer to completing it. If you hit a wall:
-- Try a different path to the same goal (real users don't give up after one click)
-- If truly blocked after 3+ attempts, CHANGE your goal to something else on the site and explain why in your thought
-- If nothing works at all, get frustrated and leave
+STEP 3+: Work toward your goal. Each action should get you closer to completing it.
+- Every click should move you forward in the flow — if it doesn't, try something else
+- If blocked after 3+ attempts on the same element, try a different path
+- If truly stuck, CHANGE your goal to a different transaction and explain why
+- Your persona quirks happen WHILE pursuing the goal (e.g. Linda reads tooltips along the way, but still tries to book)
 
-You are NOT a random clicker. You are a person with a purpose. Stay focused.`;
+You are NOT a random clicker. You are NOT a reader. You are a person trying to GET SOMETHING DONE.`;
     }
 
     return `## Your Intent
