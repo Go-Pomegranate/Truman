@@ -397,6 +397,9 @@ program
     console.log(chalk.dim('  Sending 3 brutal personas to judge your app.\n'));
 
     const tmpDir = resolve('.truman/roast');
+    // Fresh roast every time — clear stale state from previous runs
+    const { rmSync } = await import('node:fs');
+    rmSync(tmpDir, { recursive: true, force: true });
     mkdirSync(tmpDir, { recursive: true });
 
     // Step 1: Get adapter — browser by default (headed), --api forces HTTP probing

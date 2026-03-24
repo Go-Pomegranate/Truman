@@ -176,15 +176,16 @@ export class DiscoverabilityScorer {
       sessions.get(log.sessionId)!.push(log);
     }
 
-    // Detect empty state: GET action returns "0 items" or empty array
-    const getActions = new Set(['view-tasks', 'manage-calendar', 'manage-shopping', 'manage-quests', 'manage-meals']);
-    const createCounterparts: Record<string, string> = {
-      'view-tasks': 'manage-tasks',
-      'manage-calendar': 'create-event',
-      'manage-shopping': 'manage-shopping', // same action for POST
-      'manage-quests': 'manage-quests',
-      'manage-meals': 'manage-meals',
-    };
+    // Detect empty state: actions that return empty results
+    // Dynamically detect view/list actions from logs (no hardcoded names)
+    const getActions = new Set<string>();
+    const createCounterparts: Record<string, string> = {};
+    for (const log of logs) {
+      // Heuristic: actions starting with "view-" or "list-" are read actions
+      if (log.action.startsWith('view-') || log.action.startsWith('list-') || log.action.startsWith('get-')) {
+        getActions.add(log.action);
+      }
+    }
 
     for (const [, sessionLogs] of sessions) {
       const sorted = sessionLogs.sort((a, b) => a.actionIndex - b.actionIndex);
@@ -199,9 +200,8 @@ export class DiscoverabilityScorer {
         if (!isEmpty) continue;
 
         // What did the NPC do after seeing an empty state?
-        const createAction = createCounterparts[log.action];
         const nextActions = sorted.slice(i + 1, i + 4);
-        const created = nextActions.some((a) => a.action === createAction && a.result.success);
+        const created = nextActions.some((a) => (a.action.startsWith('create-') || a.action.startsWith('add-') || a.action.startsWith('manage-')) && a.result.success);
         const frustrated = nextActions.some((a) => (a.decision.frustration ?? 0) > 0.3);
         const left = nextActions.length === 0 || (nextActions[0]?.decision.wantsToContinue === false);
 
