@@ -383,6 +383,7 @@ program
   .option('--voice [backend]', 'Enable voice narration (default: auto)', 'auto')
   .option('--api', 'Use HTTP API probing instead of browser (for REST APIs / localhost)')
   .option('--headless', 'Run browser without visible window')
+  .option('--fresh', 'Clear state from previous roasts (NPCs forget everything)')
   .action(async (opts) => {
     // --target is an alias for --url
     if (opts.target && !opts.url) opts.url = opts.target;
@@ -396,10 +397,18 @@ program
     console.log(chalk.dim(`  Target: ${opts.url ?? opts.adapter}\n`));
     console.log(chalk.dim('  Sending 3 brutal personas to judge your app.\n'));
 
-    const tmpDir = resolve('.truman/roast');
-    // Fresh roast every time — clear stale state from previous runs
-    const { rmSync } = await import('node:fs');
-    rmSync(tmpDir, { recursive: true, force: true });
+    // Scope roast dir per target URL to keep memory per-site
+    const targetSlug = (opts.url ?? 'manual').replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 60);
+    const tmpDir = resolve(`.truman/roast/${targetSlug}`);
+
+    if (opts.fresh) {
+      const { rmSync } = await import('node:fs');
+      rmSync(tmpDir, { recursive: true, force: true });
+      console.log(chalk.dim('  🧹 Fresh roast — NPCs forgot everything.\n'));
+    } else if (existsSync(join(tmpDir, 'state'))) {
+      console.log(chalk.dim('  🧠 NPCs remember the last roast. They know what\'s broken.\n'));
+      console.log(chalk.dim('     Use --fresh to wipe their memory.\n'));
+    }
     mkdirSync(tmpDir, { recursive: true });
 
     // Step 1: Get adapter — browser by default (headed), --api forces HTTP probing
