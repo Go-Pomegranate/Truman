@@ -1,4 +1,4 @@
-import { chromium, type Browser, type Page } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
@@ -14,47 +14,88 @@ import type {
   ActionParam,
 } from '../types.js';
 
-// ─── Route mapping: Truman action → SPA page ──────────────────────
-// Override via PlaywrightAdapterConfig.actionRoutes or set sensible defaults.
-// Falls back to /dashboard for unknown actions.
-const DEFAULT_ACTION_ROUTES: Record<string, string> = {};
+// ─── Config ─────────────────────────────────────────────────────
 
 export interface PlaywrightAdapterConfig {
   baseUrl: string;
   headless?: boolean;
   screenshotDir?: string;
   slowMo?: number;
-  /** Custom action → SPA route mapping. Falls back to /dashboard for unknown actions. */
-  actionRoutes?: Record<string, string>;
 }
 
+// ─── Internal types ─────────────────────────────────────────────
+
+interface ScannedElement {
+  tag: string;
+  type: string; // 'link' | 'button' | 'text-input' | 'select' | 'checkbox'
+  text: string;
+  selector: string;
+  href?: string;
+  placeholder?: string;
+  label?: string;
+  inputType?: string;
+  checked?: boolean;
+  options?: string[];
+  top: number; // for above-the-fold sorting
+}
+
+interface MemberSession {
+  context: BrowserContext;
+  page: Page;
+}
+
+// ─── Weight map ─────────────────────────────────────────────────
+
+const ACTION_WEIGHTS: Record<string, number> = {
+  'click-button': 8,
+  'fill-input': 7,
+  'select-option': 6,
+  'click-link': 5,
+  'toggle-check': 5,
+  'scroll-down': 3,
+  'scroll-up': 3,
+  'go-back': 2,
+  'wait': 1,
+};
+
+// ─── Blocked href patterns ──────────────────────────────────────
+
+const BLOCKED_HREF_RE = /^(javascript:|mailto:|tel:|data:)|(^#$)/;
+
+// ─── Max limits ─────────────────────────────────────────────────
+
+const MAX_ELEMENTS = 40;
+const MAX_DESCRIPTION_LEN = 120;
+const MAX_SUMMARY_LEN = 800;
+const ACTION_TIMEOUT = 8000;
+const NAV_TIMEOUT = 10000;
+
 /**
- * Browser-based adapter — NPC navigates real UI via Playwright.
- * Uses accessibility tree for LLM context (cheap, works with gpt-4o-mini).
- * Falls back to HTTP API for data mutations.
+ * Generic browser adapter — NPC navigates any website via Playwright.
+ * Dynamically scans the page for interactive elements on every turn.
+ * Works on any website without configuration.
  */
 export class PlaywrightAdapter implements AppAdapter {
   name = 'playwright';
   baseUrl: string;
   private config: PlaywrightAdapterConfig;
   private browser: Browser | null = null;
-  private page: Page | null = null;
+  private sessions = new Map<string, MemberSession>();
   private screenshotDir: string;
   private screenshotIdx = 0;
-  private httpBaseUrl: string;
 
   constructor(config: PlaywrightAdapterConfig) {
     this.config = config;
-    this.baseUrl = config.baseUrl;
-    this.httpBaseUrl = config.baseUrl.replace(/\/$/, '');
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
     this.screenshotDir = config.screenshotDir ?? '.truman/screenshots';
     if (!existsSync(this.screenshotDir)) {
       mkdirSync(this.screenshotDir, { recursive: true });
     }
   }
 
+  // ─── authenticate ───────────────────────────────────────────
+
   async authenticate(member: MemberConfig, _family: FamilyConfig): Promise<AuthContext> {
-    // Launch browser if not yet running
     if (!this.browser) {
       this.browser = await chromium.launch({
         headless: this.config.headless ?? true,
@@ -62,36 +103,16 @@ export class PlaywrightAdapter implements AppAdapter {
       });
     }
 
-    // Reuse existing page if still open (scenarios reuse member sessions)
-    if (this.page && !this.page.isClosed()) {
-      // Just navigate to dashboard for the new member
-      try {
-        await this.page.goto(`${this.baseUrl}/dashboard`, { waitUntil: 'domcontentloaded', timeout: 8000 });
-        await this.page.waitForTimeout(500);
-        await this.takeScreenshot(`${member.id}-reuse`);
-        return { token: `truman-${member.id}`, memberId: member.id, headers: {} };
-      } catch {
-        // Page broken — create new one
-      }
-    }
-
-    // Create new page (context) for this member's session
     const context = await this.browser.newContext({
       viewport: { width: 1280, height: 800 },
-      extraHTTPHeaders: {
-        'Authorization': `Bearer truman-${member.id}`,
-        'userId': `truman-${member.id}`,
-        'X-Truman': 'true',
-        'X-Truman-Family': _family.id,
-      },
     });
-    this.page = await context.newPage();
+    const page = await context.newPage();
 
-    // Navigate to dashboard — MOCK_AUTH handles auth via headers
-    await this.page.goto(`${this.baseUrl}/dashboard`, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    await this.page.waitForTimeout(1000); // let SPA hydrate
+    this.sessions.set(member.id, { context, page });
 
-    await this.takeScreenshot(`${member.id}-login`);
+    await page.goto(this.baseUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    await page.waitForTimeout(1000);
+    await this.takeScreenshot(page, `${member.id}-start`);
 
     return {
       token: `truman-${member.id}`,
@@ -100,62 +121,74 @@ export class PlaywrightAdapter implements AppAdapter {
     };
   }
 
-  async getAvailableActions(_ctx: ActionContext): Promise<AvailableAction[]> {
-    // Return same actions as HTTP adapter — the action set doesn't change
-    return BROWSER_ACTIONS;
-  }
+  // ─── getAvailableActions ────────────────────────────────────
 
-  async executeAction(action: ChosenAction, ctx: ActionContext): Promise<ActionResult> {
-    if (!this.page) {
-      return { success: false, error: 'No browser page', duration: 0 };
+  async getAvailableActions(ctx: ActionContext): Promise<AvailableAction[]> {
+    const page = this.getPage(ctx);
+    if (!page) return STATIC_ACTIONS;
+
+    const elements = await this.scanPage(page);
+    const actions: AvailableAction[] = [];
+
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
+      const action = this.elementToAction(el, i);
+      if (action) actions.push(action);
     }
 
+    return [...actions, ...STATIC_ACTIONS];
+  }
+
+  // ─── executeAction ──────────────────────────────────────────
+
+  async executeAction(action: ChosenAction, ctx: ActionContext): Promise<ActionResult> {
+    const page = this.getPage(ctx);
+    if (!page) return { success: false, error: 'No browser page', duration: 0 };
+
     const start = Date.now();
+    const actionType = this.getActionType(action.name);
+    const selector = String(action.params.selector ?? '');
 
     try {
-      const routes = { ...DEFAULT_ACTION_ROUTES, ...this.config.actionRoutes };
-      const route = routes[action.name];
-      if (route) {
-        const currentPath = new URL(this.page.url()).pathname;
-        if (currentPath !== route) {
-          await this.page.goto(`${this.baseUrl}${route}`, { waitUntil: 'domcontentloaded', timeout: 8000 });
-          await this.page.waitForTimeout(500);
-        }
-      }
-
       let result: ActionResult;
 
-      switch (action.name) {
-        case 'check-briefing':
-          result = await this.execBriefing();
+      switch (actionType) {
+        case 'click-link':
+        case 'click-button':
+          result = await this.execClick(page, selector);
           break;
-        case 'view-tasks':
-          result = await this.execViewTasks();
+        case 'fill-input':
+          result = await this.execFill(page, selector, String(action.params.value ?? ''));
           break;
-        case 'manage-tasks':
-          result = await this.execCreateTask(action.params);
+        case 'select-option':
+          result = await this.execSelect(page, selector, String(action.params.value ?? ''));
           break;
-        case 'complete-task':
-          result = await this.execCompleteTask(action.params);
+        case 'toggle-check':
+          result = await this.execToggle(page, selector);
           break;
-        case 'manage-calendar':
-        case 'plan-week':
-          result = await this.execViewCalendar();
+        case 'scroll-down':
+          result = await this.execScroll(page, 1);
           break;
-        case 'create-event':
-          result = await this.execCreateEvent(action.params);
+        case 'scroll-up':
+          result = await this.execScroll(page, -1);
+          break;
+        case 'go-back':
+          result = await this.execGoBack(page);
+          break;
+        case 'wait':
+          await page.waitForTimeout(1000);
+          result = { success: true, duration: 1000 };
           break;
         default:
-          // Fallback: just navigate and read the page
-          result = await this.execGenericRead(action.name);
+          result = { success: false, error: `Unknown action type: ${actionType}`, duration: 0 };
       }
 
       result.duration = Date.now() - start;
-      await this.takeScreenshot(`${ctx.member.id}-${action.name}`);
+      await this.takeScreenshot(page, `${ctx.member.id}-${action.name}`);
       return result;
     } catch (err) {
       const duration = Date.now() - start;
-      await this.takeScreenshot(`${ctx.member.id}-${action.name}-error`);
+      await this.takeScreenshot(page, `${ctx.member.id}-${action.name}-error`).catch(() => {});
       return {
         success: false,
         error: err instanceof Error ? err.message : String(err),
@@ -164,152 +197,383 @@ export class PlaywrightAdapter implements AppAdapter {
     }
   }
 
-  async getAppState(_ctx: ActionContext): Promise<AppState> {
-    if (!this.page) return { summary: 'No browser page', data: {} };
+  // ─── getAppState ────────────────────────────────────────────
+
+  async getAppState(ctx: ActionContext): Promise<AppState> {
+    const page = this.getPage(ctx);
+    if (!page) return { summary: 'No browser page', data: {} };
 
     try {
-      // Get accessibility tree — what a screen reader would see
-      // @ts-expect-error — page.accessibility is deprecated in newer Playwright but still functional
-      const a11y = await this.page.accessibility.snapshot();
-      const summary = this.flattenA11yTree(a11y, 0, 3); // max depth 3
+      const url = page.url();
+      const title = await page.title();
+      const pathname = new URL(url).pathname;
+
+      // Try modern ariaSnapshot first, fall back to deprecated API, then innerText
+      let a11y = '';
+      try {
+        a11y = await page.locator('body').ariaSnapshot();
+      } catch {
+        try {
+          // @ts-expect-error — deprecated but functional in older Playwright
+          const snapshot = await page.accessibility.snapshot();
+          a11y = this.flattenA11yTree(snapshot, 0, 3);
+        } catch {
+          a11y = await this.readPageContent(page);
+        }
+      }
+
+      // Extract headings
+      const headings = await page.evaluate(() => {
+        const hs = Array.from(document.querySelectorAll('h1, h2, h3'));
+        return hs.slice(0, 10).map(h => h.textContent?.trim() ?? '').filter(Boolean);
+      }).catch(() => [] as string[]);
+
+      // Extract error/alert messages
+      const errors = await page.evaluate(() => {
+        const els = Array.from(document.querySelectorAll('[role="alert"], .error, .toast, .notification'));
+        return els.slice(0, 5).map(e => e.textContent?.trim() ?? '').filter(Boolean);
+      }).catch(() => [] as string[]);
+
+      let summary = `Page: ${title} (${pathname})\n\n`;
+      if (headings.length) summary += `Headings: ${headings.join(' > ')}\n\n`;
+      if (errors.length) summary += `Alerts: ${errors.join('; ')}\n\n`;
+      summary += `Visible content:\n${a11y}`;
 
       return {
-        summary: `Current page: ${new URL(this.page.url()).pathname}\n\n${summary}`,
-        data: { url: this.page.url() },
+        summary: summary.slice(0, MAX_SUMMARY_LEN),
+        data: { url, title },
       };
     } catch {
       return { summary: 'Could not read page', data: {} };
     }
   }
 
-  async cleanup(_ctx: ActionContext): Promise<void> {
-    // Don't close page — reuse between sessions for performance
-    // Browser is closed in close() after simulation ends
+  // ─── cleanup / close ───────────────────────────────────────
+
+  async cleanup(ctx: ActionContext): Promise<void> {
+    const session = this.sessions.get(ctx.auth.memberId);
+    if (session) {
+      await session.context.close().catch(() => {});
+      this.sessions.delete(ctx.auth.memberId);
+    }
   }
 
-  /** Call after simulation ends to close browser */
   async close(): Promise<void> {
+    for (const [id, session] of this.sessions) {
+      await session.context.close().catch(() => {});
+      this.sessions.delete(id);
+    }
     if (this.browser) {
       await this.browser.close();
       this.browser = null;
     }
   }
 
-  // ─── Action Implementations ────────────────────────────────────
+  // ─── Page scanning ─────────────────────────────────────────
 
-  private async execBriefing(): Promise<ActionResult> {
-    const page = this.page!;
-    await page.waitForTimeout(500);
+  private async scanPage(page: Page): Promise<ScannedElement[]> {
+    const elements: ScannedElement[] = await page.evaluate(() => {
+      const results: any[] = [];
+      const seen = new Set<string>();
 
-    const text = await this.readPageContent();
-    return {
-      success: true,
-      statusCode: 200,
-      response: { summary: text },
-      duration: 0,
-    };
-  }
+      function isVisible(el: Element): boolean {
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+        if ((el as HTMLElement).offsetWidth === 0 && (el as HTMLElement).offsetHeight === 0) return false;
+        if (el.getAttribute('aria-hidden') === 'true') return false;
+        return true;
+      }
 
-  private async execViewTasks(): Promise<ActionResult> {
-    const page = this.page!;
-    await page.waitForTimeout(800);
+      function getLabel(el: Element): string {
+        // Check aria-label
+        const ariaLabel = el.getAttribute('aria-label');
+        if (ariaLabel) return ariaLabel;
+        // Check associated label
+        const id = el.getAttribute('id');
+        if (id) {
+          const label = document.querySelector(`label[for="${id}"]`);
+          if (label) return label.textContent?.trim() ?? '';
+        }
+        // Check parent label
+        const parentLabel = el.closest('label');
+        if (parentLabel) return parentLabel.textContent?.trim() ?? '';
+        // Check placeholder
+        return (el as HTMLInputElement).placeholder ?? '';
+      }
 
-    const text = await this.readPageContent();
-    return {
-      success: true,
-      statusCode: 200,
-      response: { summary: text },
-      duration: 0,
-    };
-  }
+      function getSelector(el: Element): string {
+        // 1. data-testid
+        const testId = el.getAttribute('data-testid');
+        if (testId) return `[data-testid="${testId}"]`;
+        // 2. unique ID
+        const id = el.getAttribute('id');
+        if (id && document.querySelectorAll(`#${CSS.escape(id)}`).length === 1) return `#${id}`;
+        // 3. aria-label
+        const ariaLabel = el.getAttribute('aria-label');
+        if (ariaLabel) return `[aria-label="${ariaLabel}"]`;
+        // 4. CSS path fallback
+        const parts: string[] = [];
+        let current: Element | null = el;
+        while (current && current !== document.body) {
+          const tag = current.tagName.toLowerCase();
+          const parent = current.parentElement;
+          if (parent) {
+            const siblings = Array.from(parent.children).filter(c => c.tagName === current!.tagName);
+            if (siblings.length > 1) {
+              const idx = siblings.indexOf(current) + 1;
+              parts.unshift(`${tag}:nth-of-type(${idx})`);
+            } else {
+              parts.unshift(tag);
+            }
+          } else {
+            parts.unshift(tag);
+          }
+          current = parent;
+        }
+        return parts.join(' > ');
+      }
 
-  private async execCreateTask(params: Record<string, unknown>): Promise<ActionResult> {
-    const page = this.page!;
-    const title = String(params.title ?? 'New task');
+      function getRect(el: Element): DOMRect {
+        return el.getBoundingClientRect();
+      }
 
-    // Dismiss any overlays/modals blocking interaction
-    await this.dismissOverlays();
+      // Collect links
+      for (const el of document.querySelectorAll('a[href]')) {
+        if (!isVisible(el)) continue;
+        if ((el as HTMLElement).closest('[disabled]')) continue;
+        const href = el.getAttribute('href') ?? '';
+        const blockedRe = /^(javascript:|mailto:|tel:|data:)|(^#$)/;
+        if (blockedRe.test(href)) continue;
+        const text = (el.textContent?.trim() ?? '').slice(0, 80);
+        if (!text) continue;
+        const key = `link:${text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({
+          tag: 'a', type: 'link', text, selector: getSelector(el),
+          href, top: getRect(el).top,
+        });
+      }
 
-    // Try to find and click "Add task" button
-    const addBtn = await page.$('button:has-text("Add"), button:has-text("Dodaj"), button:has-text("+"), [data-testid="add-task"]');
-    if (!addBtn) {
-      // Fallback to HTTP API
-      return this.httpFallback('POST', '/api/tasks', { title, priority: params.priority ?? 'medium' });
-    }
+      // Collect buttons
+      for (const el of document.querySelectorAll('button, [role="button"], input[type="submit"]')) {
+        if (!isVisible(el)) continue;
+        if ((el as HTMLButtonElement).disabled) continue;
+        const text = (el.textContent?.trim() ?? (el as HTMLInputElement).value ?? '').slice(0, 80);
+        if (!text) continue;
+        const key = `button:${text}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({
+          tag: el.tagName.toLowerCase(), type: 'button', text, selector: getSelector(el),
+          top: getRect(el).top,
+        });
+      }
 
-    await addBtn.click();
-    await page.waitForTimeout(300);
+      // Collect text inputs
+      const inputTypes = ['text', 'email', 'password', 'search', 'tel', 'url', ''];
+      for (const el of document.querySelectorAll('input, textarea')) {
+        if (!isVisible(el)) continue;
+        if ((el as HTMLInputElement).disabled) continue;
+        const inputType = (el as HTMLInputElement).type?.toLowerCase() ?? 'text';
+        if (el.tagName === 'INPUT' && !inputTypes.includes(inputType)) continue;
+        if (inputType === 'hidden' || inputType === 'file' || inputType === 'submit') continue;
+        const label = getLabel(el);
+        const placeholder = (el as HTMLInputElement).placeholder ?? '';
+        results.push({
+          tag: el.tagName.toLowerCase(), type: 'text-input',
+          text: label || placeholder || inputType,
+          selector: getSelector(el), label, placeholder, inputType,
+          top: getRect(el).top,
+        });
+      }
 
-    // Fill the task title input
-    const input = await page.$('input[name="title"], input[placeholder*="task"], input[placeholder*="zadani"], textarea[name="title"]');
-    if (input) {
-      await input.fill(title);
-      await page.waitForTimeout(200);
+      // Collect selects
+      for (const el of document.querySelectorAll('select')) {
+        if (!isVisible(el)) continue;
+        if ((el as HTMLSelectElement).disabled) continue;
+        const label = getLabel(el);
+        const options = Array.from((el as HTMLSelectElement).options)
+          .map(o => o.text.trim()).filter(Boolean).slice(0, 20);
+        results.push({
+          tag: 'select', type: 'select',
+          text: label || 'Select',
+          selector: getSelector(el), label, options,
+          top: getRect(el).top,
+        });
+      }
 
-      // Submit
-      const submit = await page.$('button[type="submit"], button:has-text("Save"), button:has-text("Zapisz"), button:has-text("Dodaj")');
-      if (submit) await submit.click();
-      await page.waitForTimeout(500);
-    }
+      // Collect checkboxes/radios
+      for (const el of document.querySelectorAll('input[type="checkbox"], input[type="radio"], [role="checkbox"]')) {
+        if (!isVisible(el)) continue;
+        if ((el as HTMLInputElement).disabled) continue;
+        const label = getLabel(el);
+        const checked = (el as HTMLInputElement).checked ?? el.getAttribute('aria-checked') === 'true';
+        results.push({
+          tag: el.tagName.toLowerCase(), type: 'checkbox',
+          text: label || 'checkbox',
+          selector: getSelector(el), label, checked,
+          top: getRect(el).top,
+        });
+      }
 
-    return {
-      success: true,
-      statusCode: 201,
-      response: { title, created: true },
-      duration: 0,
-    };
-  }
+      // Sort by vertical position (above-the-fold first)
+      results.sort((a, b) => a.top - b.top);
 
-  private async execCompleteTask(params: Record<string, unknown>): Promise<ActionResult> {
-    const page = this.page!;
-
-    // Try to click first uncompleted task checkbox
-    const checkbox = await page.$('[data-testid="task-checkbox"]:not([data-checked]), input[type="checkbox"]:not(:checked), [role="checkbox"][aria-checked="false"]');
-    if (checkbox) {
-      await checkbox.click();
-      await page.waitForTimeout(500);
-      return { success: true, statusCode: 200, response: { completed: true }, duration: 0 };
-    }
-
-    // Fallback to HTTP
-    const taskId = params.taskId;
-    if (taskId) {
-      return this.httpFallback('POST', `/api/tasks/${taskId}/complete`, {});
-    }
-
-    return { success: false, error: 'No task checkbox found on page', duration: 0 };
-  }
-
-  private async execViewCalendar(): Promise<ActionResult> {
-    await this.page!.waitForTimeout(500);
-    const text = await this.readPageContent();
-    return { success: true, statusCode: 200, response: { summary: text }, duration: 0 };
-  }
-
-  private async execCreateEvent(params: Record<string, unknown>): Promise<ActionResult> {
-    // Calendar event creation is complex UI — fallback to HTTP
-    return this.httpFallback('POST', '/api/events', {
-      title: params.title ?? 'New event',
-      startTime: params.startTime,
-      endTime: params.endTime,
+      return results;
     });
+
+    return elements.slice(0, MAX_ELEMENTS);
   }
 
-  private async execGenericRead(actionName: string): Promise<ActionResult> {
-    await this.page!.waitForTimeout(500);
-    const text = await this.readPageContent();
-    return { success: true, statusCode: 200, response: { action: actionName, pageContent: text }, duration: 0 };
+  // ─── Element → AvailableAction mapping ─────────────────────
+
+  private elementToAction(el: ScannedElement, index: number): AvailableAction | null {
+    switch (el.type) {
+      case 'link': {
+        const desc = `Link: "${el.text}"${el.href ? ` (${el.href})` : ''}`;
+        return {
+          name: `click-link-${index}`,
+          description: desc.slice(0, MAX_DESCRIPTION_LEN),
+          category: 'navigation',
+          params: [this.selectorParam(el.selector)],
+          weight: ACTION_WEIGHTS['click-link'],
+        };
+      }
+      case 'button': {
+        const desc = `Button: "${el.text}"`;
+        return {
+          name: `click-button-${index}`,
+          description: desc.slice(0, MAX_DESCRIPTION_LEN),
+          category: 'interaction',
+          params: [this.selectorParam(el.selector)],
+          weight: ACTION_WEIGHTS['click-button'],
+        };
+      }
+      case 'text-input': {
+        const hint = el.label || el.placeholder || el.inputType || 'text';
+        const desc = `Input: "${hint}" (${el.inputType ?? 'text'})`;
+        return {
+          name: `fill-input-${index}`,
+          description: desc.slice(0, MAX_DESCRIPTION_LEN),
+          category: 'form',
+          params: [
+            this.selectorParam(el.selector),
+            { name: 'value', type: 'string', required: true, description: 'Text to type into the input', example: '' },
+          ],
+          weight: ACTION_WEIGHTS['fill-input'],
+        };
+      }
+      case 'select': {
+        const desc = `Select: "${el.text}" (${el.options?.length ?? 0} options)`;
+        return {
+          name: `select-option-${index}`,
+          description: desc.slice(0, MAX_DESCRIPTION_LEN),
+          category: 'form',
+          params: [
+            this.selectorParam(el.selector),
+            { name: 'value', type: 'enum', required: true, description: 'Option to select', enumValues: el.options ?? [] },
+          ],
+          weight: ACTION_WEIGHTS['select-option'],
+        };
+      }
+      case 'checkbox': {
+        const state = el.checked ? 'checked' : 'unchecked';
+        const desc = `Checkbox: "${el.text}" (${state})`;
+        return {
+          name: `toggle-check-${index}`,
+          description: desc.slice(0, MAX_DESCRIPTION_LEN),
+          category: 'form',
+          params: [this.selectorParam(el.selector)],
+          weight: ACTION_WEIGHTS['toggle-check'],
+        };
+      }
+      default:
+        return null;
+    }
   }
 
-  // ─── Helpers ──────────────────────────────────────────────────
+  private selectorParam(selector: string): ActionParam {
+    return {
+      name: 'selector',
+      type: 'string',
+      required: true,
+      description: 'CSS selector (use exactly as shown)',
+      example: selector,
+    };
+  }
 
-  /** Read visible page text safely — never blocks more than 2s */
-  private async readPageContent(): Promise<string> {
-    if (!this.page) return '';
+  // ─── Action executors ──────────────────────────────────────
+
+  private async execClick(page: Page, selector: string): Promise<ActionResult> {
+    const urlBefore = page.url();
+    await page.click(selector, { timeout: ACTION_TIMEOUT });
+
+    // Wait for navigation or DOM change
+    await Promise.race([
+      page.waitForNavigation({ timeout: 3000 }).catch(() => {}),
+      page.waitForTimeout(1500),
+    ]);
+
+    const urlAfter = page.url();
+    const title = await page.title();
+    return {
+      success: true,
+      response: { url: urlAfter, title, navigated: urlBefore !== urlAfter },
+      duration: 0,
+    };
+  }
+
+  private async execFill(page: Page, selector: string, value: string): Promise<ActionResult> {
+    await page.click(selector, { timeout: ACTION_TIMEOUT });
+    await page.fill(selector, value);
+    return {
+      success: true,
+      response: { filled: value },
+      duration: 0,
+    };
+  }
+
+  private async execSelect(page: Page, selector: string, value: string): Promise<ActionResult> {
+    await page.selectOption(selector, { label: value }, { timeout: ACTION_TIMEOUT });
+    return { success: true, duration: 0 };
+  }
+
+  private async execToggle(page: Page, selector: string): Promise<ActionResult> {
+    await page.click(selector, { timeout: ACTION_TIMEOUT });
+    return { success: true, response: { toggled: true }, duration: 0 };
+  }
+
+  private async execScroll(page: Page, direction: 1 | -1): Promise<ActionResult> {
+    await page.evaluate((dir) => {
+      window.scrollBy(0, dir * window.innerHeight * 0.8);
+    }, direction);
+    await page.waitForTimeout(300);
+    return { success: true, duration: 0 };
+  }
+
+  private async execGoBack(page: Page): Promise<ActionResult> {
+    await page.goBack({ timeout: 5000 }).catch(() => {});
+    const url = page.url();
+    return { success: true, response: { url }, duration: 0 };
+  }
+
+  // ─── Helpers ───────────────────────────────────────────────
+
+  private getPage(ctx: ActionContext): Page | null {
+    return this.sessions.get(ctx.auth.memberId)?.page ?? null;
+  }
+
+  private getActionType(name: string): string {
+    // "click-link-3" → "click-link", "scroll-down" → "scroll-down"
+    const match = name.match(/^(.+?)-\d+$/);
+    return match ? match[1] : name;
+  }
+
+  private async readPageContent(page: Page): Promise<string> {
     try {
-      // Try #root first (React app container), then body
       const text = await Promise.race([
-        this.page.evaluate(() => {
+        page.evaluate(() => {
           const root = document.getElementById('root') ?? document.body;
           return root.innerText;
         }),
@@ -319,59 +583,6 @@ export class PlaywrightAdapter implements AppAdapter {
     } catch {
       return '';
     }
-  }
-
-  /** Dismiss onboarding overlays, modals, toasts that block interaction */
-  private async dismissOverlays(): Promise<void> {
-    if (!this.page) return;
-    try {
-      // Click away any overlay backdrops
-      const overlay = await this.page.$('[aria-hidden="true"].fixed.inset-0, [data-radix-dialog-overlay], .overlay-backdrop');
-      if (overlay) {
-        await this.page.keyboard.press('Escape');
-        await this.page.waitForTimeout(300);
-      }
-      // Close any toast notifications
-      const closeBtn = await this.page.$('[data-dismiss], button[aria-label="Close"], button[aria-label="Zamknij"]');
-      if (closeBtn) await closeBtn.click().catch(() => {});
-    } catch { /* ignore */ }
-  }
-
-  private async httpFallback(method: string, path: string, body: Record<string, unknown>): Promise<ActionResult> {
-    const page = this.page!;
-    const ctx = page.context();
-
-    // Use page's fetch to inherit cookies/headers from browser context
-    const result = await page.evaluate(
-      async ({ url, method, body }) => {
-        const resp = await fetch(url, {
-          method,
-          headers: { 'Content-Type': 'application/json' },
-          body: method !== 'GET' ? JSON.stringify(body) : undefined,
-        });
-        const data = await resp.json().catch(() => resp.text());
-        return { ok: resp.ok, status: resp.status, data };
-      },
-      { url: `${this.httpBaseUrl}${path}`, method, body },
-    );
-
-    return {
-      success: result.ok,
-      statusCode: result.status,
-      response: result.data,
-      error: result.ok ? undefined : `HTTP ${result.status}`,
-      duration: 0,
-    };
-  }
-
-  private async takeScreenshot(label: string): Promise<void> {
-    if (!this.page) return;
-    this.screenshotIdx++;
-    const filename = `${String(this.screenshotIdx).padStart(3, '0')}-${label}.png`;
-    await this.page.screenshot({
-      path: join(this.screenshotDir, filename),
-      fullPage: false,
-    });
   }
 
   private flattenA11yTree(node: any, depth: number, maxDepth: number): string {
@@ -386,42 +597,29 @@ export class PlaywrightAdapter implements AppAdapter {
     }
 
     if (node.children) {
-      for (const child of node.children.slice(0, 20)) { // limit children to prevent huge trees
+      for (const child of node.children.slice(0, 20)) {
         result += this.flattenA11yTree(child, depth + 1, maxDepth);
       }
     }
 
     return result;
   }
+
+  private async takeScreenshot(page: Page, label: string): Promise<void> {
+    this.screenshotIdx++;
+    const filename = `${String(this.screenshotIdx).padStart(3, '0')}-${label}.png`;
+    await page.screenshot({
+      path: join(this.screenshotDir, filename),
+      fullPage: false,
+    }).catch(() => {});
+  }
 }
 
-// ─── Available Actions (browser-compatible subset) ──────────────
+// ─── Static actions (always available) ──────────────────────
 
-const BROWSER_ACTIONS: AvailableAction[] = [
-  { name: 'check-briefing', description: 'View dashboard with daily briefing', category: 'briefing', params: [], weight: 10 },
-  { name: 'view-tasks', description: 'View task list', category: 'tasks', params: [], weight: 7 },
-  {
-    name: 'manage-tasks', description: 'Create a new task via the UI', category: 'tasks',
-    params: [{ name: 'title', type: 'string', required: true, description: 'Task title', example: 'Kupić mleko' }],
-    weight: 8,
-  },
-  {
-    name: 'complete-task', description: 'Click checkbox on a task to complete it', category: 'tasks',
-    params: [{ name: 'taskId', type: 'number', required: false, description: 'Task ID (optional, clicks first unchecked)' }],
-    weight: 5,
-  },
-  { name: 'manage-calendar', description: 'View calendar page', category: 'calendar', params: [], weight: 7 },
-  {
-    name: 'create-event', description: 'Create calendar event', category: 'calendar',
-    params: [
-      { name: 'title', type: 'string', required: true, description: 'Event title' },
-      { name: 'startTime', type: 'string', required: true, description: 'ISO datetime' },
-      { name: 'endTime', type: 'string', required: true, description: 'ISO datetime' },
-    ],
-    weight: 5,
-  },
-  { name: 'plan-week', description: 'View weekly calendar', category: 'calendar', params: [], weight: 6 },
-  { name: 'manage-wellness', description: 'View wellness page', category: 'wellness', params: [], weight: 5 },
-  { name: 'manage-meals', description: 'View meals page', category: 'meals', params: [], weight: 4 },
-  { name: 'manage-finance', description: 'View finance page', category: 'finance', params: [], weight: 3 },
+const STATIC_ACTIONS: AvailableAction[] = [
+  { name: 'scroll-down', description: 'Scroll down one viewport', category: 'browser', params: [], weight: ACTION_WEIGHTS['scroll-down'] },
+  { name: 'scroll-up', description: 'Scroll up one viewport', category: 'browser', params: [], weight: ACTION_WEIGHTS['scroll-up'] },
+  { name: 'go-back', description: 'Go back to previous page', category: 'navigation', params: [], weight: ACTION_WEIGHTS['go-back'] },
+  { name: 'wait', description: 'Observe the current page without acting', category: 'browser', params: [], weight: ACTION_WEIGHTS['wait'] },
 ];
