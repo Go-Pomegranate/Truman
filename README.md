@@ -15,7 +15,24 @@
   <a href="https://github.com/Go-Pomegranate/Truman/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="MIT License" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.6+-blue?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>
   <a href="https://github.com/Go-Pomegranate/Truman/actions"><img src="https://img.shields.io/github/actions/workflow/status/Go-Pomegranate/Truman/ci.yml?style=flat-square&label=CI" alt="CI" /></a>
+  <a href="https://github.com/Go-Pomegranate/Truman/stargazers"><img src="https://img.shields.io/github/stars/Go-Pomegranate/Truman?style=flat-square" alt="GitHub stars" /></a>
 </p>
+
+---
+
+## Roast your app in 30 seconds
+
+```bash
+npx @parentos/truman roast --target https://your-app.com
+```
+
+> Three brutal personas. One command. A report that hurts your feelings.
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Truman roast demo" width="700" />
+</p>
+
+<!-- To record this GIF: brew install charmbracelet/tap/vhs && vhs assets/demo.tape -->
 
 ---
 
@@ -110,13 +127,28 @@ Frustration > 0.85 → they leave.
 - **Realistic schedules** — 7am coffee check, not a 3am bot swarm.
 - **Multi-provider** — OpenAI, Anthropic, Ollama (free & local).
 - **Any HTTP API** — adapter pattern, no SDK lock-in.
+- **Voice narration** — hear your NPCs complain out loud.
+- **Bug export** — pipe findings into any bug tracker.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `truman roast` | One command, 3 brutal personas, bug report |
+| `truman run` | Run simulation — NPCs use your app |
+| `truman init` | Scaffold adapter + families for your app |
+| `truman validate` | Check family YAML configs |
+| `truman preview` | Dry run — see what NPCs would do, no API calls |
+| `truman report` | Re-generate report from saved logs |
+
+Full reference with all flags and examples: **[docs/commands.md](docs/commands.md)**
 
 ## LLM providers
 
 ```bash
-OPENAI_API_KEY=sk-...    npx @parentos/truman run --once              # OpenAI (default)
-ANTHROPIC_API_KEY=sk-... npx @parentos/truman run --once -p anthropic # Anthropic
-                         npx @parentos/truman run --once -p ollama    # Ollama (free)
+OPENAI_API_KEY=sk-...    truman run --once              # OpenAI (default)
+ANTHROPIC_API_KEY=sk-... truman run --once -p anthropic # Anthropic
+                         truman run --once -p ollama    # Ollama (free & local)
 ```
 
 ## Programmatic API
@@ -145,12 +177,17 @@ await engine.runOnce();
 
 Truman is the closest thing to putting real users in front of your app without actually doing it.
 
+## Built with
+
+Built by the team behind [ParentOS](https://github.com/Go-Pomegranate) — where we test our own app with synthetic families every day.
+
 ---
 
 <p align="center">
 <strong>Your app isn't hard to use.</strong><br/>
 You're just the only one who knows where everything is.<br/><br/>
-<code>npx @parentos/truman run --once</code>
+<code>npx @parentos/truman roast</code><br/><br/>
+<a href="https://github.com/Go-Pomegranate/Truman">Star it</a> · <a href="https://github.com/Go-Pomegranate/Truman/issues">Report a bug</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 ---
