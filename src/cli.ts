@@ -735,14 +735,24 @@ function createEventLogger(): (event: EngineEvent) => void {
         const duration = chalk.dim(`${event.log.result.duration}ms`);
         const mood = event.log.decision.mood ? chalk.dim(` [${event.log.decision.mood}]`) : '';
         console.log(`    ${icon} ${event.log.memberName}: ${event.log.action} ${duration}${mood}`);
+        // Show NPC's inner monologue
+        const thought = event.log.decision.thought;
+        if (thought && thought.length > 3) {
+          console.log(chalk.italic.dim(`       💬 "${thought}"`));
+        }
         break;
       }
       case 'session:end':
         console.log(chalk.cyan(`  ● Session ${event.sessionId.slice(0, 8)} ended (${event.actions} actions)`));
         break;
-      case 'member:frustrated':
-        console.log(chalk.yellow(`  ⚠ ${event.memberId} frustrated (${(event.level * 100).toFixed(0)}%) — aborting session`));
+      case 'member:frustrated': {
+        console.log(chalk.yellow(`  ⚠ ${event.memberId} frustrated (${(event.level * 100).toFixed(0)}%) — rage quit`));
+        const lastThought = (event as any).thought;
+        if (lastThought && lastThought.length > 3) {
+          console.log(chalk.red.italic(`       🚪 "${lastThought}"`));
+        }
         break;
+      }
       case 'issue:detected':
         console.log(chalk.red(`  ! Issue: ${event.issue.action} — ${event.issue.error}`));
         break;
@@ -1037,12 +1047,14 @@ function printReportSummary(report: FullReport, sessionLogDir?: string): void {
     if (firstAction && !interesting.includes(firstAction)) interesting.push(firstAction);
 
     if (interesting.length > 0) {
-      console.log(chalk.cyan(BOX.v) + pad(chalk.bold.white('  💭 NPC THOUGHTS'), W - 2) + chalk.cyan(BOX.v));
-      for (const e of interesting.slice(0, 3)) {
+      console.log(chalk.cyan(BOX.v) + pad(chalk.bold.white('  💭 NPC DIARY'), W - 2) + chalk.cyan(BOX.v));
+      for (const e of interesting.slice(0, 5)) {
         const icon = e.result.success ? chalk.green('✓') : chalk.red('✗');
-        const truncated = e.decision.reasoning.length > 58
-          ? e.decision.reasoning.slice(0, 55) + '...'
+        // Prefer thought (the unfiltered monologue), fall back to reasoning
+        const quote = (e.decision.thought && e.decision.thought.length > 3)
+          ? e.decision.thought
           : e.decision.reasoning;
+        const truncated = quote.length > 62 ? quote.slice(0, 59) + '...' : quote;
         console.log(chalk.cyan(BOX.v) + pad(`    ${icon} ${chalk.bold(e.memberName)} ${chalk.dim(`(${e.decision.mood})`)}`, W - 2) + chalk.cyan(BOX.v));
         console.log(chalk.cyan(BOX.v) + pad(`      ${chalk.italic.dim(`"${truncated}"`)}`, W - 2) + chalk.cyan(BOX.v));
       }
