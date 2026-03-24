@@ -5,6 +5,7 @@ export interface SessionHistoryEntry {
   params: Record<string, unknown>;
   success: boolean;
   responseSnippet: string;
+  goal?: string;
 }
 
 /**

@@ -734,6 +734,7 @@ function sleep(ms: number): Promise<void> {
 // ─── Helpers ────────────────────────────────────────────────────
 
 function createEventLogger(): (event: EngineEvent) => void {
+  const memberGoals = new Map<string, string>();
   return (event) => {
     switch (event.type) {
       case 'simulation:start':
@@ -747,6 +748,13 @@ function createEventLogger(): (event: EngineEvent) => void {
         const duration = chalk.dim(`${event.log.result.duration}ms`);
         const mood = event.log.decision.mood ? chalk.dim(` [${event.log.decision.mood}]`) : '';
         console.log(`    ${icon} ${event.log.memberName}: ${event.log.action} ${duration}${mood}`);
+        // Show NPC's goal if new or changed
+        const goal = (event.log.decision as any).goal;
+        const prevGoal = memberGoals.get(event.log.memberId);
+        if (goal && goal !== prevGoal) {
+          console.log(chalk.yellow(`       🎯 Goal: "${goal}"`));
+          memberGoals.set(event.log.memberId, goal);
+        }
         // Show NPC's inner monologue
         const thought = event.log.decision.thought;
         if (thought && thought.length > 3) {

@@ -202,7 +202,7 @@ export class SimulationEngine {
     const ctx = { auth, family, member };
 
     let actionCount = 0, sessionFrustration = 0, wantsToContinue = true;
-    const sessionHistory: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string }[] = [];
+    const sessionHistory: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string; goal?: string }[] = [];
 
     while (wantsToContinue && actionCount < MAX_ACTIONS_PER_SESSION && this.running) {
       const [allActions, appState] = await Promise.all([
@@ -235,6 +235,7 @@ export class SimulationEngine {
         params: filledParams,
         success: result.success,
         responseSnippet: this.summarizeResponse(result),
+        goal: (decision as any).goal,
       });
 
       sessionFrustration = decision.frustration ?? sessionFrustration;
@@ -407,6 +408,7 @@ export class SimulationEngine {
         params: filledParams,
         success: result.success,
         responseSnippet: this.summarizeResponse(result),
+        goal: (decision as any).goal,
       });
 
       sessionFrustration = decision.frustration ?? sessionFrustration;

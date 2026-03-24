@@ -24,7 +24,7 @@ export class PersonaBuilder {
     appState: AppState;
     scheduledAction: ScheduleEntry;
     currentTime: string;
-    sessionHistory?: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string }[];
+    sessionHistory?: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string; goal?: string }[];
     scenario?: ScenarioConfig;
   }): string {
     const {
@@ -109,9 +109,15 @@ ${appState.summary}`;
   }
 
   private buildSessionHistorySection(
-    history: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string }[],
+    history: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string; goal?: string }[],
   ): string {
     if (history.length === 0) return '';
+
+    // Show the NPC's current goal from their last action
+    const lastGoal = [...history].reverse().find(h => h.goal)?.goal;
+    const goalLine = lastGoal
+      ? `\n🎯 Your current goal: "${lastGoal}"\nKeep pursuing this goal. If blocked, you may change it — but explain why.\n`
+      : '';
 
     const lines = history.map((h, i) => {
       const icon = h.success ? '✓' : '✗';
@@ -122,9 +128,10 @@ ${appState.summary}`;
     });
 
     return `## What You Did This Session (results from the app)
+${goalLine}
 ${lines.join('\n')}
 
-Use IDs and data from the responses above to inform your next action. For example, if you saw task #442, you can complete-task with taskId=442.`;
+Use IDs and data from the responses above to inform your next action.`;
   }
 
   private buildScenarioSection(scenario: ScenarioConfig): string {
@@ -149,12 +156,29 @@ CRITICAL RULES for this mission:
   private buildScheduleSection(entry: ScheduleEntry): string {
     if (entry.action === 'random') {
       return `## Your Intent
-You opened the app to browse around. Pick whatever feels natural for your persona. Try different features.`;
+You just opened this app/website for the first time.
+
+STEP 1 (first action only): Look around the page. Read what it says. Figure out what this app IS and what you can do here.
+
+STEP 2 (after your first look): Based on what you see AND your persona, decide on a SPECIFIC GOAL — something a real person would try to accomplish on this site. Examples:
+- If it's a shooting range: "I want to book the 50m range for Saturday at 2pm"
+- If it's a restaurant: "I want to order delivery for tonight"
+- If it's a SaaS app: "I want to set up my first project"
+
+Write your goal in the "goal" field of your response. Then PURSUE IT step by step.
+
+STEP 3+: Work toward your goal. Each action should get you closer to completing it. If you hit a wall:
+- Try a different path to the same goal (real users don't give up after one click)
+- If truly blocked after 3+ attempts, CHANGE your goal to something else on the site and explain why in your thought
+- If nothing works at all, get frustrated and leave
+
+You are NOT a random clicker. You are a person with a purpose. Stay focused.`;
     }
 
     return `## Your Intent
 You opened the app because: ${entry.description ?? entry.action}
-You started with "${entry.action}" but now explore naturally — check other things, create entries, react to what you see. A real person doesn't repeat the same screen 10 times.`;
+
+Based on this, set a SPECIFIC GOAL in the "goal" field — what exactly do you want to accomplish? Then pursue it step by step. If blocked, try another path or change your goal.`;
   }
 
   private buildActionsSection(actions: AvailableAction[]): string {
@@ -200,6 +224,7 @@ ${actionList}`;
 Respond with a JSON object:
 {
   "action": "action_name",
+  "goal": "your current goal — what you're trying to accomplish on this site (e.g. 'Book the 50m range for Saturday'). Set on first action, keep or update on subsequent actions. If you change goals, explain in reasoning.",
   "reasoning": "1-2 sentences explaining what you're trying to do AND how the app is making you feel, in character. Be specific about UX pain points.",
   "thought": "what you ACTUALLY think right now — unfiltered, in character, 5-20 words. Be brutally honest. Examples: 'Bro what even IS this page', 'OK I literally cannot find the menu', 'Wait that actually worked? Shocked.', 'Three clicks to do ONE thing, are you serious?', 'I've been staring at this for 30 seconds and I still don't know what to do', 'This button does... nothing? Cool cool cool.', 'My grandma could design a better nav bar'",
   "params": { ... action parameters ... },

@@ -31,7 +31,7 @@ export class DecisionEngine {
     appState: AppState;
     scheduledAction: ScheduleEntry;
     currentTime: string;
-    sessionHistory?: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string }[];
+    sessionHistory?: { action: string; params: Record<string, unknown>; success: boolean; responseSnippet: string; goal?: string }[];
     scenario?: ScenarioConfig;
   }): Promise<Decision> {
     const prompt = this.personaBuilder.buildDecisionPrompt(opts);
