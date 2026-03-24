@@ -282,7 +282,13 @@ program
   .command('report')
   .description('View reports from previous runs')
   .option('--log-dir <path>', 'Log directory', './.truman/logs')
+  .option('--bugs [path]', 'Show bugs from last roast (or specify bugs.json path)')
   .action((opts) => {
+    if (opts.bugs !== undefined) {
+      printBugs(typeof opts.bugs === 'string' ? opts.bugs : undefined);
+      return;
+    }
+
     const logDir = resolve(opts.logDir);
 
     if (!existsSync(logDir)) {
@@ -300,6 +306,14 @@ program
     const reportPath = join(logDir, latest);
     const report = JSON.parse(readFileSync(reportPath, 'utf-8'));
     printReportSummary(report as FullReport, logDir);
+  });
+
+program
+  .command('bugs')
+  .description('Show bugs found by the last roast')
+  .argument('[path]', 'Path to bugs.json (default: .truman/roast/bugs.json)')
+  .action((bugPath?: string) => {
+    printBugs(bugPath);
   });
 
 // ─── Init command ───────────────────────────────────────────────
@@ -572,13 +586,70 @@ members:
       const { writeFileSync } = await import('node:fs');
       writeFileSync(bugsPath, JSON.stringify(bugs, null, 2), 'utf-8');
       console.log(chalk.magenta(`  🐛 ${bugs.length} bug(s) found → ${bugsPath}`));
-      console.log(chalk.dim(`     Feed to your bug tracker: npx @parentos/truman run --export-bugs bugs.json\n`));
+      console.log(chalk.dim(`     View details: npx @parentos/truman bugs ${bugsPath}\n`));
     }
 
     if (playwrightAdapter) await playwrightAdapter.close();
 
     console.log(chalk.red.bold('\n  🔥 Roast complete. Fix your app.\n'));
   });
+
+// ─── Bug viewer ─────────────────────────────────────────────────
+
+function printBugs(bugPath?: string): void {
+  const paths = bugPath
+    ? [resolve(bugPath)]
+    : [resolve('.truman/roast/bugs.json'), resolve('/private/tmp/.truman/roast/bugs.json'), resolve('/tmp/.truman/roast/bugs.json')];
+
+  let bugs: any[] | null = null;
+  let foundPath = '';
+  for (const p of paths) {
+    if (existsSync(p)) {
+      bugs = JSON.parse(readFileSync(p, 'utf-8'));
+      foundPath = p;
+      break;
+    }
+  }
+
+  if (!bugs || bugs.length === 0) {
+    console.log(chalk.dim('\n  No bugs found. Run a roast first:\n'));
+    console.log(chalk.white('    npx @parentos/truman roast --target https://your-app.com\n'));
+    return;
+  }
+
+  console.log(chalk.bold.red(`\n  🐛 ${bugs.length} bug(s) found\n`));
+  console.log(chalk.dim(`  Source: ${foundPath}\n`));
+
+  for (const bug of bugs) {
+    const sev = bug.severity;
+    const sevLabel = typeof sev === 'number' ? (sev >= 4 ? 'HIGH' : sev >= 2 ? 'MEDIUM' : 'LOW') : String(sev ?? 'UNKNOWN').toUpperCase();
+    const color = sevLabel === 'HIGH' ? chalk.red : sevLabel === 'MEDIUM' ? chalk.yellow : chalk.dim;
+
+    // Clean ANSI codes from title
+    const title = (bug.title ?? bug.action ?? 'Unknown bug').replace(/\x1b\[[0-9;]*m/g, '').split('\n')[0];
+    console.log(color(`  ■ [${sevLabel}] ${title}`));
+
+    // Affected NPCs
+    const affected = bug.aiAnalysis?.affectedMembers ?? bug.affectedPersonas ?? [];
+    if (affected.length) console.log(chalk.dim(`    Affected NPCs: ${affected.join(', ')}`));
+
+    // Frustration impact
+    if (bug.aiAnalysis?.frustrationImpact) {
+      console.log(chalk.dim(`    Frustration impact: ${Math.round(bug.aiAnalysis.frustrationImpact * 100)}%`));
+    }
+
+    // Steps to reproduce
+    if (bug.stepsToReproduce) {
+      const steps = bug.stepsToReproduce.replace(/\x1b\[[0-9;]*m/g, '').split('\n').filter(Boolean);
+      console.log(chalk.dim('    Steps:'));
+      for (const step of steps.slice(0, 5)) console.log(chalk.dim(`      ${step}`));
+    }
+
+    // Expected behavior
+    if (bug.expectedBehavior) console.log(chalk.dim(`    Expected: ${bug.expectedBehavior}`));
+    console.log('');
+  }
+}
 
 // ─── Auto-install Playwright ────────────────────────────────────
 
