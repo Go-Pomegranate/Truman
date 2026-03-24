@@ -84,11 +84,14 @@ program
         try {
           ({ PlaywrightAdapter } = await import('./adapters/PlaywrightAdapter.js'));
         } catch {
-          console.log(chalk.red('  ✗ Playwright is required for browser mode.\n'));
-          console.log(chalk.dim('  Install it:\n'));
-          console.log(chalk.white('    npm install playwright'));
-          console.log(chalk.white('    npx playwright install chromium\n'));
-          process.exit(1);
+          await autoInstallPlaywright();
+          try {
+            ({ PlaywrightAdapter } = await import('./adapters/PlaywrightAdapter.js'));
+          } catch {
+            console.log(chalk.red('\n  ✗ Playwright installation failed. Install manually:\n'));
+            console.log(chalk.white('    npm install playwright && npx playwright install chromium\n'));
+            process.exit(1);
+          }
         }
         const adapterConfig = await loadAdapterConfig(opts.adapter);
         playwrightAdapter = new PlaywrightAdapter({
@@ -364,7 +367,8 @@ program
   .option('-p, --provider <type>', 'LLM provider: openai | ollama | anthropic', 'openai')
   .option('-m, --model <name>', 'LLM model name', 'gpt-4o-mini')
   .option('--voice [backend]', 'Enable voice narration (default: auto)', 'auto')
-  .option('--browser', 'Use Playwright browser instead of HTTP API probing')
+  .option('--api', 'Use HTTP API probing instead of browser (for REST APIs / localhost)')
+  .option('--browser', 'Use Playwright browser (default for roast)')
   .option('--headed', 'Open visible browser window (implies --browser)')
   .action(async (opts) => {
     // --target is an alias for --url
@@ -382,8 +386,8 @@ program
     const tmpDir = resolve('.truman/roast');
     mkdirSync(tmpDir, { recursive: true });
 
-    // Step 1: Get adapter — browser by default for roast, or existing adapter
-    const useBrowser = opts.adapter ? (opts.browser || opts.headed) : true;
+    // Step 1: Get adapter — browser by default, --api forces HTTP probing
+    const useBrowser = opts.api ? false : (opts.adapter ? (opts.browser || opts.headed) : true);
     let adapterPath: string | null = null;
     let playwrightAdapter: any = null;
 
@@ -393,11 +397,15 @@ program
       try {
         ({ PlaywrightAdapter } = await import('./adapters/PlaywrightAdapter.js'));
       } catch {
-        console.log(chalk.red('  ✗ Playwright is required for browser mode.\n'));
-        console.log(chalk.dim('  Install it:\n'));
-        console.log(chalk.white('    npm install playwright'));
-        console.log(chalk.white('    npx playwright install chromium\n'));
-        process.exit(1);
+        // Auto-install Playwright with Truman-style flair
+        await autoInstallPlaywright();
+        try {
+          ({ PlaywrightAdapter } = await import('./adapters/PlaywrightAdapter.js'));
+        } catch (e) {
+          console.log(chalk.red('\n  ✗ Playwright installation failed. Install manually:\n'));
+          console.log(chalk.white('    npm install playwright && npx playwright install chromium\n'));
+          process.exit(1);
+        }
       }
       playwrightAdapter = new PlaywrightAdapter({
         baseUrl: opts.url!,
@@ -572,6 +580,70 @@ members:
 
     console.log(chalk.red.bold('\n  🔥 Roast complete. Fix your app.\n'));
   });
+
+// ─── Auto-install Playwright ────────────────────────────────────
+
+async function autoInstallPlaywright(): Promise<void> {
+  const { execSync } = await import('node:child_process');
+
+  const lines = [
+    '  ╔══════════════════════════════════════════════════════╗',
+    '  ║                                                      ║',
+    '  ║   🎭 TRUMAN SETUP                                    ║',
+    '  ║                                                      ║',
+    '  ║   Your synthetic users need a browser.               ║',
+    '  ║   They can\'t judge your app without one.             ║',
+    '  ║                                                      ║',
+    '  ║   Installing Playwright...                           ║',
+    '  ║                                                      ║',
+    '  ╚══════════════════════════════════════════════════════╝',
+  ];
+
+  console.log('');
+  for (const line of lines) {
+    console.log(chalk.green(line));
+    await sleep(80);
+  }
+  console.log('');
+
+  const steps = [
+    { msg: '  Waking up the NPCs...', cmd: 'npm install playwright --no-save --silent' },
+    { msg: '  Downloading Chromium — the NPCs\' window to your world...', cmd: 'npx playwright install chromium' },
+  ];
+
+  for (const step of steps) {
+    process.stdout.write(chalk.dim(step.msg));
+    try {
+      execSync(step.cmd, { stdio: 'pipe', timeout: 120_000 });
+      console.log(chalk.green(' ✓'));
+    } catch {
+      console.log(chalk.red(' ✗'));
+      throw new Error(`Failed: ${step.cmd}`);
+    }
+  }
+
+  const ready = [
+    '',
+    chalk.green('  ╔══════════════════════════════════════════════════════╗'),
+    chalk.green('  ║                                                      ║'),
+    chalk.green('  ║   ✓ Setup complete.                                  ║'),
+    chalk.green('  ║                                                      ║'),
+    chalk.green('  ║   Your users are fake.                               ║'),
+    chalk.green('  ║   They just don\'t know it yet.                       ║'),
+    chalk.green('  ║                                                      ║'),
+    chalk.green('  ╚══════════════════════════════════════════════════════╝'),
+    '',
+  ];
+
+  for (const line of ready) {
+    console.log(line);
+    await sleep(60);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // ─── Helpers ────────────────────────────────────────────────────
 
