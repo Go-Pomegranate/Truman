@@ -151,6 +151,22 @@ export class PlaywrightAdapter implements AppAdapter {
     const actionType = this.getActionType(action.name);
     const selector = String(action.params.selector ?? '');
 
+    // Handle iframe elements — click by text inside the frame
+    if (selector.startsWith('iframe[')) {
+      try {
+        const actionText = action.name; // e.g. click-button-42
+        const desc = (action as any).description ?? '';
+        // Extract the text from the action description to find element in iframe
+        const textMatch = desc.match(/\[iframe\]\s*(.+?)"/)?.[1] ?? '';
+        const result = await this.execIframeClick(page, selector, textMatch || actionType);
+        result.duration = Date.now() - start;
+        await this.takeScreenshot(page, `${ctx.member.id}-${action.name}`);
+        return result;
+      } catch (err) {
+        return { success: false, error: `iframe action failed: ${err instanceof Error ? err.message : String(err)}`, duration: Date.now() - start };
+      }
+    }
+
     try {
       let result: ActionResult;
 
@@ -435,6 +451,73 @@ export class PlaywrightAdapter implements AppAdapter {
       return results;
     });
 
+    // Also scan visible iframes for interactive elements
+    try {
+      const frames = page.frames().filter(f => f !== page.mainFrame() && f.url() !== 'about:blank');
+      for (const frame of frames.slice(0, 3)) { // max 3 iframes
+        try {
+          const iframeElements: ScannedElement[] = await frame.evaluate(() => {
+            const results: any[] = [];
+            const seen = new Set<string>();
+
+            function isVisible(el: Element): boolean {
+              const style = getComputedStyle(el);
+              if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+              if ((el as HTMLElement).offsetWidth === 0 && (el as HTMLElement).offsetHeight === 0) return false;
+              return true;
+            }
+
+            // Scan buttons and links inside iframe
+            for (const el of document.querySelectorAll('button, [role="button"], a[href]')) {
+              if (!isVisible(el)) continue;
+              if ((el as HTMLButtonElement).disabled) continue;
+              const text = (el.textContent?.trim() ?? '').slice(0, 80);
+              if (!text || seen.has(text)) continue;
+              seen.add(text);
+              const isLink = el.tagName === 'A';
+              results.push({
+                tag: el.tagName.toLowerCase(),
+                type: isLink ? 'link' : 'button',
+                text: `[iframe] ${text}`,
+                selector: `iframe-action`, // placeholder — will use frame click
+                href: isLink ? (el as HTMLAnchorElement).href : undefined,
+                top: el.getBoundingClientRect().top,
+                frameUrl: window.location.href,
+              });
+            }
+
+            // Scan inputs inside iframe
+            for (const el of document.querySelectorAll('input:not([type=hidden]):not([type=file]), textarea, select')) {
+              if (!isVisible(el)) continue;
+              if ((el as HTMLInputElement).disabled) continue;
+              const placeholder = (el as HTMLInputElement).placeholder ?? '';
+              const label = el.getAttribute('aria-label') ?? placeholder ?? el.getAttribute('name') ?? '';
+              results.push({
+                tag: el.tagName.toLowerCase(),
+                type: el.tagName === 'SELECT' ? 'select' : 'text-input',
+                text: `[iframe] ${label}`,
+                selector: 'iframe-action',
+                placeholder, label,
+                inputType: (el as HTMLInputElement).type ?? 'text',
+                top: el.getBoundingClientRect().top,
+                frameUrl: window.location.href,
+              });
+            }
+
+            return results.slice(0, 10); // max 10 per iframe
+          });
+
+          // Give iframe elements real selectors via frame locators
+          for (const el of iframeElements) {
+            const frameSelector = `iframe[src*="${new URL(frame.url()).pathname.slice(0, 30)}"]`;
+            el.selector = frameSelector; // Mark as iframe element
+            el.text = el.text.slice(0, 80);
+          }
+          elements.push(...iframeElements);
+        } catch { /* iframe not accessible */ }
+      }
+    } catch { /* ignore frame errors */ }
+
     return elements.slice(0, MAX_ELEMENTS);
   }
 
@@ -519,7 +602,20 @@ export class PlaywrightAdapter implements AppAdapter {
 
   private async execClick(page: Page, selector: string): Promise<ActionResult> {
     const urlBefore = page.url();
-    await page.click(selector, { timeout: ACTION_TIMEOUT });
+
+    try {
+      await page.click(selector, { timeout: ACTION_TIMEOUT });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      // If blocked by overlay/iframe, try to dismiss and retry
+      if (msg.includes('intercepts pointer events') || msg.includes('outside of the viewport')) {
+        await this.dismissOverlay(page);
+        // Retry once after dismissal
+        await page.click(selector, { timeout: ACTION_TIMEOUT });
+      } else {
+        throw err;
+      }
+    }
 
     // Wait for navigation or DOM change
     await Promise.race([
@@ -537,7 +633,17 @@ export class PlaywrightAdapter implements AppAdapter {
   }
 
   private async execFill(page: Page, selector: string, value: string): Promise<ActionResult> {
-    await page.click(selector, { timeout: ACTION_TIMEOUT });
+    try {
+      await page.click(selector, { timeout: ACTION_TIMEOUT });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('intercepts pointer events') || msg.includes('outside of the viewport')) {
+        await this.dismissOverlay(page);
+        await page.click(selector, { timeout: ACTION_TIMEOUT });
+      } else {
+        throw err;
+      }
+    }
     await page.fill(selector, value);
     return {
       success: true,
@@ -568,6 +674,70 @@ export class PlaywrightAdapter implements AppAdapter {
     await page.goBack({ timeout: 5000 }).catch(() => {});
     const url = page.url();
     return { success: true, response: { url }, duration: 0 };
+  }
+
+  // ─── Iframe interaction ────────────────────────────────────
+
+  private async execIframeClick(page: Page, iframeSelector: string, text: string): Promise<ActionResult> {
+    // Find the iframe and interact with elements inside it
+    const frames = page.frames().filter(f => f !== page.mainFrame() && f.url() !== 'about:blank');
+
+    for (const frame of frames) {
+      try {
+        // Try to find and click element by text inside the frame
+        const el = await frame.locator(`button:has-text("${text}"), a:has-text("${text}"), [role="button"]:has-text("${text}")`).first();
+        if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await el.click({ timeout: ACTION_TIMEOUT });
+          await page.waitForTimeout(1000);
+          return { success: true, response: { iframe: true, clicked: text }, duration: 0 };
+        }
+      } catch { /* try next frame */ }
+    }
+
+    // Fallback: try clicking the first visible button/link in any iframe
+    for (const frame of frames) {
+      try {
+        const btn = await frame.locator('button:visible, a:visible').first();
+        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+          const btnText = await btn.textContent().catch(() => '');
+          await btn.click({ timeout: ACTION_TIMEOUT });
+          await page.waitForTimeout(1000);
+          return { success: true, response: { iframe: true, clicked: btnText?.trim() }, duration: 0 };
+        }
+      } catch { /* try next frame */ }
+    }
+
+    return { success: false, error: 'Could not find element in iframe', duration: 0 };
+  }
+
+  // ─── Overlay dismissal ─────────────────────────────────────
+
+  private async dismissOverlay(page: Page): Promise<void> {
+    // Strategy 1: Press Escape (closes modals, popups, overlays)
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+
+    // Strategy 2: Click outside any modal backdrop
+    try {
+      const backdrop = await page.$('.modal-backdrop, [data-testid*="overlay"], [class*="overlay"], [class*="backdrop"]');
+      if (backdrop) {
+        await backdrop.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(300);
+      }
+    } catch { /* ignore */ }
+
+    // Strategy 3: Close iframe modals by clicking close buttons
+    try {
+      const closeBtn = await page.$('[class*="modal"] button[class*="close"], [class*="modal"] [aria-label="Close"], [class*="modal"] [aria-label="Zamknij"]');
+      if (closeBtn) {
+        await closeBtn.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(300);
+      }
+    } catch { /* ignore */ }
+
+    // Strategy 4: If iframe is blocking, try scrolling to move it out of the way
+    await page.evaluate(() => window.scrollBy(0, -200)).catch(() => {});
+    await page.waitForTimeout(200);
   }
 
   // ─── Helpers ───────────────────────────────────────────────
