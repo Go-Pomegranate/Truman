@@ -572,7 +572,7 @@ members:
       const { writeFileSync } = await import('node:fs');
       writeFileSync(bugsPath, JSON.stringify(bugs, null, 2), 'utf-8');
       console.log(chalk.magenta(`  🐛 ${bugs.length} bug(s) found → ${bugsPath}`));
-      console.log(chalk.dim(`     Feed to your bug tracker: truman run --export-bugs bugs.json\n`));
+      console.log(chalk.dim(`     Feed to your bug tracker: npx @parentos/truman run --export-bugs bugs.json\n`));
     }
 
     if (playwrightAdapter) await playwrightAdapter.close();
