@@ -749,7 +749,7 @@ function createEventLogger(): (event: EngineEvent) => void {
         const mood = event.log.decision.mood ? chalk.dim(` [${event.log.decision.mood}]`) : '';
         console.log(`    ${icon} ${event.log.memberName}: ${event.log.action} ${duration}${mood}`);
         // Show NPC's goal if new or changed
-        const goal = (event.log.decision as any).goal;
+        const goal = event.log.decision.goal;
         const prevGoal = memberGoals.get(event.log.memberId);
         if (goal && goal !== prevGoal) {
           console.log(chalk.yellow(`       🎯 Goal: "${goal}"`));

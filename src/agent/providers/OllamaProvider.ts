@@ -59,7 +59,9 @@ export class OllamaProvider implements LLMProvider {
 
     return {
       action: parsed.action ?? 'none',
+      goal: parsed.goal,
       reasoning: parsed.reasoning ?? '',
+      thought: parsed.thought,
       params: parsed.params ?? {},
       mood: parsed.mood,
       frustration: Math.min(1, Math.max(0, parsed.frustration ?? 0)),

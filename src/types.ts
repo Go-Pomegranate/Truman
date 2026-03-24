@@ -164,6 +164,8 @@ export interface DecisionOptions {
 export interface Decision {
   /** Which action to take */
   action: string;
+  /** NPC's current goal — what they're trying to accomplish on this site */
+  goal?: string;
   /** LLM's reasoning (useful for debugging) */
   reasoning: string;
   /** Parameters for the action */

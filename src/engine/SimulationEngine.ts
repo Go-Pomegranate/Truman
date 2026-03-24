@@ -235,7 +235,7 @@ export class SimulationEngine {
         params: filledParams,
         success: result.success,
         responseSnippet: this.summarizeResponse(result),
-        goal: (decision as any).goal,
+        goal: decision.goal,
       });
 
       sessionFrustration = decision.frustration ?? sessionFrustration;
@@ -408,7 +408,7 @@ export class SimulationEngine {
         params: filledParams,
         success: result.success,
         responseSnippet: this.summarizeResponse(result),
-        goal: (decision as any).goal,
+        goal: decision.goal,
       });
 
       sessionFrustration = decision.frustration ?? sessionFrustration;
