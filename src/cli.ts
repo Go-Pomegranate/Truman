@@ -368,8 +368,7 @@ program
   .option('-m, --model <name>', 'LLM model name', 'gpt-4o-mini')
   .option('--voice [backend]', 'Enable voice narration (default: auto)', 'auto')
   .option('--api', 'Use HTTP API probing instead of browser (for REST APIs / localhost)')
-  .option('--browser', 'Use Playwright browser (default for roast)')
-  .option('--headed', 'Open visible browser window (implies --browser)')
+  .option('--headless', 'Run browser without visible window')
   .action(async (opts) => {
     // --target is an alias for --url
     if (opts.target && !opts.url) opts.url = opts.target;
@@ -386,8 +385,8 @@ program
     const tmpDir = resolve('.truman/roast');
     mkdirSync(tmpDir, { recursive: true });
 
-    // Step 1: Get adapter — browser by default, --api forces HTTP probing
-    const useBrowser = opts.api ? false : (opts.adapter ? (opts.browser || opts.headed) : true);
+    // Step 1: Get adapter — browser by default (headed), --api forces HTTP probing
+    const useBrowser = opts.api ? false : !opts.adapter;
     let adapterPath: string | null = null;
     let playwrightAdapter: any = null;
 
@@ -409,11 +408,11 @@ program
       }
       playwrightAdapter = new PlaywrightAdapter({
         baseUrl: opts.url!,
-        headless: !opts.headed,
+        headless: !!opts.headless,
         screenshotDir: resolve(join(tmpDir, 'screenshots')),
-        slowMo: opts.headed ? 100 : 0,
+        slowMo: opts.headless ? 0 : 100,
       });
-      console.log(chalk.cyan(`  🌐 Browser mode${opts.headed ? ' (headed)' : ' (headless)'}\n`));
+      console.log(chalk.cyan(`  🌐 Browser mode${opts.headless ? ' (headless)' : ' — watch your NPCs roast your app live'}\n`));
     } else if (opts.adapter) {
       adapterPath = resolve(opts.adapter);
       const adapterConfig = JSON.parse(readFileSync(adapterPath, 'utf-8'));
