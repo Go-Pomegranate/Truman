@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@parentos/truman"><img src="https://img.shields.io/npm/v/@parentos/truman.svg?style=flat-square" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/truman-cli"><img src="https://img.shields.io/npm/v/truman-cli.svg?style=flat-square" alt="npm version" /></a>
   <a href="https://github.com/Go-Pomegranate/Truman/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="MIT License" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.6+-blue?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>
   <a href="https://github.com/Go-Pomegranate/Truman/actions"><img src="https://img.shields.io/github/actions/workflow/status/Go-Pomegranate/Truman/ci.yml?style=flat-square&label=CI" alt="CI" /></a>
@@ -77,7 +77,7 @@ Then you get a report on what worked — and what made them leave.
 ## Install
 
 ```bash
-npm install @parentos/truman
+npm install truman-cli
 ```
 
 Or run it directly — no install needed:
@@ -155,7 +155,7 @@ ANTHROPIC_API_KEY=sk-... truman run --once -p anthropic # Anthropic
 ## Programmatic API
 
 ```typescript
-import { SimulationEngine, HttpApiAdapter, createProvider } from '@parentos/truman';
+import { SimulationEngine, HttpApiAdapter, createProvider } from 'truman-cli';
 
 const engine = new SimulationEngine({
   families: ['./families/smiths.yaml'],
