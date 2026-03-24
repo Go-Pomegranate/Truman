@@ -6,6 +6,6 @@ export default defineConfig({
   dts: true,
   outDir: 'dist',
   clean: true,
-  splitting: false,
+  splitting: true,
   external: ['playwright', 'openai', '@anthropic-ai/sdk'],
 });
