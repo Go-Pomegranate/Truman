@@ -359,6 +359,7 @@ program
   .command('roast')
   .description('Roast any app — 3 brutal personas, voice narration, one report')
   .option('--url <baseUrl>', 'Base URL of the app to roast')
+  .option('--target <baseUrl>', 'Alias for --url')
   .option('-a, --adapter <path>', 'Path to existing adapter.json (skips probing)')
   .option('-p, --provider <type>', 'LLM provider: openai | ollama | anthropic', 'openai')
   .option('-m, --model <name>', 'LLM model name', 'gpt-4o-mini')
@@ -366,8 +367,11 @@ program
   .option('--browser', 'Use Playwright browser instead of HTTP API probing')
   .option('--headed', 'Open visible browser window (implies --browser)')
   .action(async (opts) => {
+    // --target is an alias for --url
+    if (opts.target && !opts.url) opts.url = opts.target;
+
     if (!opts.url && !opts.adapter) {
-      console.log(chalk.red('  ✗ Provide --url or --adapter\n'));
+      console.log(chalk.red('  ✗ Provide --url (or --target) or --adapter\n'));
       process.exit(1);
     }
 
@@ -378,8 +382,8 @@ program
     const tmpDir = resolve('.truman/roast');
     mkdirSync(tmpDir, { recursive: true });
 
-    // Step 1: Get adapter — browser, existing adapter, or probe
-    const useBrowser = opts.browser || opts.headed;
+    // Step 1: Get adapter — browser by default for roast, or existing adapter
+    const useBrowser = opts.adapter ? (opts.browser || opts.headed) : true;
     let adapterPath: string | null = null;
     let playwrightAdapter: any = null;
 
