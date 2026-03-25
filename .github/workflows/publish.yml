@@ -11,6 +11,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -41,3 +43,58 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+
+      # ─── Discord changelog notification ────────────────────────
+      - name: Build changelog
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          # Get commits since previous tag
+          PREV_TAG=$(git tag --sort=-creatordate | head -2 | tail -1)
+          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$VERSION" ]; then
+            COMMITS=$(git log --oneline -10)
+          else
+            COMMITS=$(git log --oneline "${PREV_TAG}..${VERSION}")
+          fi
+          # Format for Discord embed
+          CHANGELOG=$(echo "$COMMITS" | sed 's/^/• /' | head -15)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Use delimiter for multiline
+          {
+            echo "changelog<<CHANGELOG_EOF"
+            echo "$CHANGELOG"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notify Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          # Skip if no webhook configured
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "No DISCORD_WEBHOOK_URL secret set, skipping"
+            exit 0
+          fi
+
+          VERSION="${{ steps.changelog.outputs.version }}"
+          CHANGELOG="${{ steps.changelog.outputs.changelog }}"
+          NPM_URL="https://www.npmjs.com/package/truman-cli"
+          GITHUB_URL="https://github.com/Go-Pomegranate/Truman/releases/tag/${VERSION}"
+
+          # Send Discord embed
+          curl -s -H "Content-Type: application/json" \
+            -d "{
+              \"embeds\": [{
+                \"title\": \"🎭 Truman ${VERSION} released\",
+                \"description\": \"**Changes:**\n\`\`\`\n${CHANGELOG}\n\`\`\`\",
+                \"color\": 5814783,
+                \"fields\": [
+                  { \"name\": \"📦 npm\", \"value\": \"[truman-cli@${VERSION}](${NPM_URL})\", \"inline\": true },
+                  { \"name\": \"📋 Release\", \"value\": \"[GitHub](${GITHUB_URL})\", \"inline\": true },
+                  { \"name\": \"⚡ Install\", \"value\": \"\`npx truman-cli roast --target https://your-app.com\`\", \"inline\": false }
+                ],
+                \"footer\": { \"text\": \"Your app's users are fake. They just don't know it yet.\" }
+              }]
+            }" \
+            "$DISCORD_WEBHOOK"
