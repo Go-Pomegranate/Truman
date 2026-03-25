@@ -39,32 +39,45 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-
-      # ─── Discord changelog notification ────────────────────────
+      # ─── Build changelog from commits ──────────────────────────
       - name: Build changelog
         id: changelog
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          # Get commits since previous tag
-          PREV_TAG=$(git tag --sort=-creatordate | head -2 | tail -1)
-          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" = "$VERSION" ]; then
-            COMMITS=$(git log --oneline -10)
+          PREV_TAG=$(git tag --sort=-creatordate | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --oneline -15)
           else
-            COMMITS=$(git log --oneline "${PREV_TAG}..${VERSION}")
+            COMMITS=$(git log --oneline "${PREV_TAG}..${VERSION}" | head -20)
           fi
-          # Format for Discord embed
-          CHANGELOG=$(echo "$COMMITS" | sed 's/^/• /' | head -15)
+
+          # Format for GitHub Release (markdown)
+          GH_BODY=$(echo "$COMMITS" | sed 's/^[a-f0-9]* /- /')
+
+          # Format for Discord (bullet points)
+          DISCORD_BODY=$(echo "$COMMITS" | sed 's/^/• /' | head -15)
+
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # Use delimiter for multiline
           {
-            echo "changelog<<CHANGELOG_EOF"
-            echo "$CHANGELOG"
-            echo "CHANGELOG_EOF"
+            echo "gh_body<<GH_EOF"
+            echo "$GH_BODY"
+            echo "GH_EOF"
           } >> "$GITHUB_OUTPUT"
+          {
+            echo "discord_body<<DISCORD_EOF"
+            echo "$DISCORD_BODY"
+            echo "DISCORD_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ## What's Changed
+            ${{ steps.changelog.outputs.gh_body }}
+
+            **npm:** `npm i truman-cli@${{ github.ref_name }}`
+            **Try it:** `npx truman-cli roast --target https://your-app.com`
 
       - name: Notify Discord
         if: success()
@@ -78,7 +91,7 @@ jobs:
           fi
 
           VERSION="${{ steps.changelog.outputs.version }}"
-          CHANGELOG="${{ steps.changelog.outputs.changelog }}"
+          CHANGELOG="${{ steps.changelog.outputs.discord_body }}"
           NPM_URL="https://www.npmjs.com/package/truman-cli"
           GITHUB_URL="https://github.com/Go-Pomegranate/Truman/releases/tag/${VERSION}"
 
