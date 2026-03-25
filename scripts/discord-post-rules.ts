@@ -6,38 +6,38 @@ const GUILD_ID = process.env.DISCORD_GUILD_ID!;
 const API = "https://discord.com/api/v10";
 
 async function main() {
-  // Get bot's own user ID
-  const meRes = await fetch(`${API}/users/@me`, {
-    headers: { Authorization: `Bot ${TOKEN}` },
-  });
-  const me: { id: string } = await meRes.json();
+	// Get bot's own user ID
+	const meRes = await fetch(`${API}/users/@me`, {
+		headers: { Authorization: `Bot ${TOKEN}` },
+	});
+	const me: { id: string } = await meRes.json();
 
-  const res = await fetch(`${API}/guilds/${GUILD_ID}/channels`, {
-    headers: { Authorization: `Bot ${TOKEN}` },
-  });
-  const channels: { id: string; name: string }[] = await res.json();
-  const rules = channels.find((c) => c.name === "rules");
+	const res = await fetch(`${API}/guilds/${GUILD_ID}/channels`, {
+		headers: { Authorization: `Bot ${TOKEN}` },
+	});
+	const channels: { id: string; name: string }[] = await res.json();
+	const rules = channels.find((c) => c.name === "rules");
 
-  if (!rules) {
-    console.error("Channel #rules not found");
-    process.exit(1);
-  }
+	if (!rules) {
+		console.error("Channel #rules not found");
+		process.exit(1);
+	}
 
-  // Temporarily allow the bot to send messages in #rules
-  await fetch(`${API}/channels/${rules.id}/permissions/${me.id}`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bot ${TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      id: me.id,
-      type: 1, // member
-      allow: "2048", // SEND_MESSAGES
-    }),
-  });
+	// Temporarily allow the bot to send messages in #rules
+	await fetch(`${API}/channels/${rules.id}/permissions/${me.id}`, {
+		method: "PUT",
+		headers: {
+			Authorization: `Bot ${TOKEN}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			id: me.id,
+			type: 1, // member
+			allow: "2048", // SEND_MESSAGES
+		}),
+	});
 
-  const message = `# Server Rules
+	const message = `# Server Rules
 
 **1. Be respectful.** Treat everyone with kindness. No harassment, hate speech, or personal attacks.
 
@@ -57,28 +57,28 @@ async function main() {
 
 **9. Have fun roasting apps, not people.**`;
 
-  const postRes = await fetch(`${API}/channels/${rules.id}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bot ${TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ content: message }),
-  });
+	const postRes = await fetch(`${API}/channels/${rules.id}/messages`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bot ${TOKEN}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ content: message }),
+	});
 
-  if (!postRes.ok) {
-    const text = await postRes.text();
-    console.error(`Failed to post: ${postRes.status} ${text}`);
-    process.exit(1);
-  }
+	if (!postRes.ok) {
+		const text = await postRes.text();
+		console.error(`Failed to post: ${postRes.status} ${text}`);
+		process.exit(1);
+	}
 
-  // Remove the temporary bot permission override
-  await fetch(`${API}/channels/${rules.id}/permissions/${me.id}`, {
-    method: "DELETE",
-    headers: { Authorization: `Bot ${TOKEN}` },
-  });
+	// Remove the temporary bot permission override
+	await fetch(`${API}/channels/${rules.id}/permissions/${me.id}`, {
+		method: "DELETE",
+		headers: { Authorization: `Bot ${TOKEN}` },
+	});
 
-  console.log("Rules posted to #rules!");
+	console.log("Rules posted to #rules!");
 }
 
 main();
