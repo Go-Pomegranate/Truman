@@ -1,6 +1,6 @@
 {
 	"name": "truman-cli",
-	"version": "0.1.8",
+	"version": "0.1.9",
 	"description": "Your app's users are fake. They just don't know it yet.",
 	"type": "module",
 	"license": "MIT",
