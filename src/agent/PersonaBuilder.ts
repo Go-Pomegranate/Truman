@@ -42,7 +42,7 @@ export class PersonaBuilder {
     // Scenario mode: replace schedule section with mission-driven goal
     const intentSection = scenario
       ? this.buildScenarioSection(scenario)
-      : this.buildScheduleSection(scheduledAction);
+      : this.buildScheduleSection(scheduledAction, member);
 
     const sections = [
       this.buildPersonaSection(member, family),
@@ -121,9 +121,13 @@ ${appState.summary}`;
 
     const lines = history.map((h, i) => {
       const icon = h.success ? '✓' : '✗';
-      const paramsStr = Object.keys(h.params).length > 0
-        ? ` (${Object.entries(h.params).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ').slice(0, 80)})`
-        : '';
+      // Show human-readable params, skip technical selectors
+      const humanParams = Object.entries(h.params)
+        .filter(([k]) => !['selector'].includes(k))
+        .map(([k, v]) => typeof v === 'string' ? v : `${k}=${JSON.stringify(v)}`)
+        .join(', ')
+        .slice(0, 60);
+      const paramsStr = humanParams ? ` — ${humanParams}` : '';
       return `${i + 1}. ${icon} ${h.action}${paramsStr}\n   → ${h.responseSnippet}`;
     });
 
@@ -153,8 +157,16 @@ CRITICAL RULES for this mission:
 - Prefer actions you haven't done yet in this session`;
   }
 
-  private buildScheduleSection(entry: ScheduleEntry): string {
+  private buildScheduleSection(entry: ScheduleEntry, member?: MemberConfig): string {
     if (entry.action === 'random') {
+      // Persona-specific intents for roast crew
+      if (member?.id === 'milo') {
+        return this.buildMiloIntent();
+      }
+      if (member?.id === 'rose') {
+        return this.buildRoseIntent();
+      }
+
       return `## Your Intent
 You just opened this app/website for the first time.
 
@@ -240,5 +252,59 @@ Respond with a JSON object:
 }
 
 Pick ONE action. Be realistic — a real person wouldn't do 20 things in a row.`;
+  }
+
+  private buildMiloIntent(): string {
+    return `## Your Intent — VISUAL DESIGN REVIEW
+You are reviewing this website's visual design quality. You are NOT here to use the app. You are here to JUDGE how it looks.
+
+Your goal: "Evaluate the visual design quality of every section of this site"
+
+Your process:
+1. Start at the top of the page. Evaluate the hero section, header, navigation.
+2. Scroll down section by section. For each section, note in your "thought":
+   - Layout quality (spacing, alignment, visual hierarchy)
+   - Typography (font choices, sizes, readability)
+   - Color usage (harmony, contrast, accessibility)
+   - CTA clarity (can you tell what to click?)
+   - Does it look professional or AI-generated/template-y?
+   - Mobile-readiness (does it look like it would work on a phone?)
+3. Click into 2-3 subpages to check consistency across the site.
+4. Your final action should summarize your overall design verdict.
+
+IMPORTANT: Your primary actions are scroll-down, scroll-up, and occasional navigation clicks.
+You are NOT trying to complete any transaction. You are a design critic doing a visual audit.
+Every "thought" should be a specific design observation, not a functional complaint.
+
+Example thoughts:
+- "Hero section has no clear CTA — where am I supposed to click?"
+- "These cards have 4 different border-radius values. Pick one."
+- "Font pairing is actually solid — clean sans-serif headers with readable body text"
+- "This footer looks like a 2015 WordPress template. Needs work."
+- "Spacing between sections is inconsistent — 64px here, 32px there, 48px over there"`;
+  }
+
+  private buildRoseIntent(): string {
+    return `## Your Intent — QA TESTING
+You are stress-testing every interactive element on this site. Your mission is to BREAK things.
+
+Your goal: "Test every clickable element, form, and edge case on this site"
+
+Your process:
+1. Start by clicking every button and link you can see on the current page.
+2. Test forms: submit them empty, with special characters, with extremely long text.
+3. Test navigation: use back button, refresh mid-flow, click logo to go home.
+4. Test edge cases: double-click buttons, click during loading, scroll to hidden elements.
+5. Move to subpages and repeat.
+
+RULES:
+- You MUST try every interactive element you see before moving to the next page.
+- When you find a broken element, note it in your "thought" and move on — don't get stuck.
+- Try filling inputs with edge case data: "'; DROP TABLE users;--", "🎯🔥", "a".repeat(500), empty string
+- Test what happens when you go back after submitting a form.
+- You are methodical — work left-to-right, top-to-bottom.
+
+You are NOT trying to accomplish a user goal. You are trying to find bugs.
+Every broken link, failed click, or weird behavior is a win for you.`;
   }
 }

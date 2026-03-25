@@ -82,6 +82,7 @@
   },
   "files": [
     "dist",
+    "assets/sounds",
     "schemas",
     "README.md",
     "LICENSE",

@@ -598,9 +598,27 @@ export class PlaywrightAdapter implements AppAdapter {
     };
   }
 
+  // ─── Selector sanitization ────────────────────────────────
+
+  /** Fix invalid selectors that LLMs sometimes generate */
+  private sanitizeSelector(selector: string): string {
+    // :contains("text") is not valid CSS — convert to Playwright text selector
+    const containsMatch = selector.match(/^(\w+):contains\(['"](.+?)['"]\)$/);
+    if (containsMatch) {
+      const [, tag, text] = containsMatch;
+      return `${tag}:has-text("${text}")`;
+    }
+    // Remove any remaining :contains() calls
+    if (selector.includes(':contains(')) {
+      return selector.replace(/:contains\([^)]+\)/g, '');
+    }
+    return selector;
+  }
+
   // ─── Action executors ──────────────────────────────────────
 
   private async execClick(page: Page, selector: string): Promise<ActionResult> {
+    selector = this.sanitizeSelector(selector);
     const urlBefore = page.url();
 
     try {
@@ -610,8 +628,8 @@ export class PlaywrightAdapter implements AppAdapter {
       // If blocked by overlay/iframe, try to dismiss and retry
       if (msg.includes('intercepts pointer events') || msg.includes('outside of the viewport')) {
         await this.dismissOverlay(page);
-        // Retry once after dismissal
-        await page.click(selector, { timeout: ACTION_TIMEOUT });
+        // Retry once after dismissal with shorter timeout
+        await page.click(selector, { timeout: 4000 });
       } else {
         throw err;
       }
@@ -633,13 +651,14 @@ export class PlaywrightAdapter implements AppAdapter {
   }
 
   private async execFill(page: Page, selector: string, value: string): Promise<ActionResult> {
+    selector = this.sanitizeSelector(selector);
     try {
       await page.click(selector, { timeout: ACTION_TIMEOUT });
     } catch (err) {
       const msg = err instanceof Error ? err.message : '';
       if (msg.includes('intercepts pointer events') || msg.includes('outside of the viewport')) {
         await this.dismissOverlay(page);
-        await page.click(selector, { timeout: ACTION_TIMEOUT });
+        await page.click(selector, { timeout: 4000 });
       } else {
         throw err;
       }
@@ -713,11 +732,39 @@ export class PlaywrightAdapter implements AppAdapter {
   // ─── Overlay dismissal ─────────────────────────────────────
 
   private async dismissOverlay(page: Page): Promise<void> {
-    // Strategy 1: Press Escape (closes modals, popups, overlays)
+    // Strategy 1: Press Escape (closes modals, popups, dialogs)
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
 
-    // Strategy 2: Click outside any modal backdrop
+    // Strategy 2: Close Radix/Headless UI dialogs by pressing Escape again
+    // (some dialogs need Escape twice: once to close dropdown, once to close modal)
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+
+    // Strategy 3: Force-click close buttons (modals, consent banners)
+    try {
+      const closeSelectors = [
+        '[class*="modal"] button[class*="close"]',
+        '[class*="modal"] [aria-label="Close"]',
+        '[class*="modal"] [aria-label="Zamknij"]',
+        '[data-state="open"] button[class*="close"]',
+        'button[aria-label="Close"]',
+        'button[aria-label="Dismiss"]',
+        '#consent-reject', '#consent-accept',
+        '[class*="consent"] button',
+        '[class*="cookie"] button',
+      ];
+      for (const sel of closeSelectors) {
+        const btn = await page.$(sel);
+        if (btn) {
+          await btn.click({ force: true }).catch(() => {});
+          await page.waitForTimeout(300);
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Strategy 4: Click outside any modal backdrop
     try {
       const backdrop = await page.$('.modal-backdrop, [data-testid*="overlay"], [class*="overlay"], [class*="backdrop"]');
       if (backdrop) {
@@ -726,17 +773,24 @@ export class PlaywrightAdapter implements AppAdapter {
       }
     } catch { /* ignore */ }
 
-    // Strategy 3: Close iframe modals by clicking close buttons
-    try {
-      const closeBtn = await page.$('[class*="modal"] button[class*="close"], [class*="modal"] [aria-label="Close"], [class*="modal"] [aria-label="Zamknij"]');
-      if (closeBtn) {
-        await closeBtn.click({ force: true }).catch(() => {});
-        await page.waitForTimeout(300);
-      }
-    } catch { /* ignore */ }
-
-    // Strategy 4: If iframe is blocking, try scrolling to move it out of the way
-    await page.evaluate(() => window.scrollBy(0, -200)).catch(() => {});
+    // Strategy 5: Nuclear option — force remove pointer-events blockers via JS
+    // When <html> or a full-page overlay blocks everything, remove it
+    await page.evaluate(() => {
+      // Remove pointer-events: none from html/body
+      document.documentElement.style.pointerEvents = 'auto';
+      document.body.style.pointerEvents = 'auto';
+      // Remove Radix overlays that block the entire page
+      document.querySelectorAll('[data-radix-portal], [vaul-overlay], [data-state="open"][role="dialog"]').forEach(el => {
+        (el as HTMLElement).style.pointerEvents = 'none';
+      });
+      // Remove fixed/absolute positioned full-screen overlays
+      document.querySelectorAll('div[style*="pointer-events"], div[class*="overlay"]').forEach(el => {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > window.innerWidth * 0.8 && rect.height > window.innerHeight * 0.8) {
+          (el as HTMLElement).style.pointerEvents = 'none';
+        }
+      });
+    }).catch(() => {});
     await page.waitForTimeout(200);
   }
 

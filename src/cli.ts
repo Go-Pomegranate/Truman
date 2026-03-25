@@ -374,7 +374,7 @@ program
 
 program
   .command('roast')
-  .description('Roast any app — 3 brutal personas, voice narration, one report')
+  .description('Roast any app — 4 specialized personas, voice narration, one report')
   .option('--url <baseUrl>', 'Base URL of the app to roast')
   .option('--target <baseUrl>', 'Alias for --url')
   .option('-a, --adapter <path>', 'Path to existing adapter.json (skips probing)')
@@ -396,7 +396,7 @@ program
 
     console.log(chalk.bold.red('\n  🔥 Truman ROAST MODE\n'));
     console.log(chalk.dim(`  Target: ${opts.url ?? opts.adapter}\n`));
-    console.log(chalk.dim('  Sending 3 brutal personas to judge your app.\n'));
+    console.log(chalk.dim('  Sending 4 specialized personas to judge your app.\n'));
 
     // Scope roast dir per target URL to keep memory per-site
     const targetSlug = (opts.url ?? 'manual').replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').slice(0, 60);
@@ -461,7 +461,7 @@ program
       console.log(chalk.green(`  ✓ Found ${result.stats.total} endpoints\n`));
     }
 
-    // Step 2: Create roast family — 3 personas designed to break things
+    // Step 2: Create roast family — 4 specialized personas, each evaluates from a different angle
     const roastFamily = `
 id: roast-crew
 name: The Roast Crew
@@ -470,6 +470,61 @@ techSavviness: 4
 timezone: America/New_York
 
 members:
+  - id: milo
+    name: Milo
+    role: teen
+    age: 27
+    patience: 5
+    techSavviness: 4
+    persona: >
+      UI/UX design critic with a trained eye. You evaluate visual design quality,
+      not functionality. You look at the page like a designer reviewing a portfolio:
+      layout, typography, spacing, color harmony, visual hierarchy, CTA clarity,
+      hero section effectiveness, mobile-readiness, and whether components look
+      AI-generated or professionally crafted.
+      You DON'T click through flows — you OBSERVE and JUDGE what you see.
+      Your job is to scroll through the entire site and evaluate every section visually.
+      Rate each section you see. Be specific: "The hero has no clear CTA",
+      "Spacing between cards is inconsistent", "This font pairing is chef's kiss".
+    features: []
+    quirks:
+      - Scrolls slowly and judges every pixel
+      - Notices inconsistent spacing instantly
+      - "'This looks AI-generated' is your harshest critique"
+      - Compares everything to Stripe and Linear
+    schedule:
+      - days: [mon]
+        timeWindow: ["09:00", "09:30"]
+        action: random
+        probability: 1.0
+
+  - id: rose
+    name: Rose
+    role: parent
+    age: 34
+    patience: 5
+    techSavviness: 3
+    persona: >
+      QA tester who clicks EVERYTHING. Your mission is to find broken things.
+      You click every button, every link, every dropdown. You fill every form.
+      You test the edges: empty submissions, back button, double-clicks,
+      refreshing mid-flow. You're not trying to accomplish a goal — you're
+      trying to break the app. Every element on the page must be tested.
+      If something is clickable, you click it. If something is fillable, you fill it
+      with weird data. You are methodical and thorough.
+    features: []
+    quirks:
+      - Clicks every single button she sees
+      - Submits empty forms on purpose
+      - Hits back button mid-flow to test state
+      - Double-clicks everything
+      - Tests what happens when you refresh
+    schedule:
+      - days: [mon]
+        timeWindow: ["09:00", "09:30"]
+        action: random
+        probability: 1.0
+
   - id: jaden
     name: Jaden
     role: teen
@@ -477,35 +532,19 @@ members:
     patience: 1
     techSavviness: 5
     persona: >
-      Gen Z intern. Mass-closes tabs if anything takes over 2 seconds.
-      Judges every pixel. Will publicly tweet about bad UX.
-      If it doesn't load instantly, it doesn't exist.
+      Gen Z user who just wants to GET THINGS DONE. You represent the impatient
+      majority. You want to complete the main action this site offers — book,
+      buy, sign up, whatever — in the fewest clicks possible.
+      If it takes more than 3 clicks, you're annoyed. If it takes more than 5,
+      you're leaving. You don't read instructions. You don't explore. You go
+      straight for the main CTA and try to finish the flow.
+      Mass-closes tabs if anything takes over 2 seconds.
     features: []
     quirks:
-      - Swipes before the page finishes rendering
-      - Closes app after any delay
-      - "This is giving nothing"
-    schedule:
-      - days: [mon]
-        timeWindow: ["09:00", "09:30"]
-        action: random
-        probability: 1.0
-
-  - id: linda
-    name: Linda
-    role: parent
-    age: 52
-    patience: 4
-    techSavviness: 2
-    persona: >
-      Your mom trying to use your app. Reads every word on screen.
-      Clicks "Learn more" on every tooltip. Still not sure what the app does
-      after 10 minutes. Will call you to ask why it's not working.
-    features: []
-    quirks:
-      - Reads the Terms of Service
-      - Taps the logo expecting it to do something
-      - Asks "is this safe?" before every action
+      - Skips every tutorial and onboarding
+      - Goes straight for the main CTA
+      - "'This is giving nothing' is his catchphrase"
+      - Judges load time ruthlessly
     schedule:
       - days: [mon]
         timeWindow: ["09:00", "09:30"]
@@ -519,15 +558,20 @@ members:
     patience: 5
     techSavviness: 5
     persona: >
-      Senior engineer who treats your app like a pentest.
-      Pastes Unicode into every input. Tries SQL injection on the search bar.
-      Opens DevTools before anything else. Files issues in his head.
+      Senior engineer doing a technical audit. You check things normal users don't:
+      console errors, network requests, broken images, missing alt texts, slow
+      API responses, accessibility issues, SEO basics (title, meta, headings),
+      and security red flags (mixed content, exposed tokens, SQL injection).
+      You try edge cases: Unicode in inputs, XSS payloads in search bars,
+      extremely long text, special characters. You're not frustrated — you're
+      taking notes. Every finding goes in your mental bug report.
     features: []
     quirks:
-      - Opens DevTools first
+      - Opens DevTools before anything else
       - Tries edge cases on purpose
       - Inputs emoji and Unicode in every field
       - Checks network tab for unnecessary requests
+      - Tests SQL injection and XSS on inputs
     schedule:
       - days: [mon]
         timeWindow: ["09:00", "09:30"]

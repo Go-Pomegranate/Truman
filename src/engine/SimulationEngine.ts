@@ -213,16 +213,24 @@ export class SimulationEngine {
 
       const availableActions = this.filterRepeatedActions(allActions, sessionHistory);
       const memberState = this.stateManager.getMemberState(family.id, member.id);
-      const decision = await this.decisionEngine.decide({
-        member,
-        family,
-        memberState,
-        availableActions,
-        appState,
-        scheduledAction: schedule,
-        currentTime: this.scheduler.now().toISOString(),
-        sessionHistory,
-      });
+      let decision;
+      try {
+        decision = await this.decisionEngine.decide({
+          member,
+          family,
+          memberState,
+          availableActions,
+          appState,
+          scheduledAction: schedule,
+          currentTime: this.scheduler.now().toISOString(),
+          sessionHistory,
+        });
+      } catch (err) {
+        // LLM returned empty/invalid response — skip this turn, don't crash
+        console.error(`  ⚠ LLM error for ${member.name}: ${err instanceof Error ? err.message : err}`);
+        actionCount++;
+        continue;
+      }
 
       if (this.config.beforeAction && !(await this.config.beforeAction(ctx))) break;
       await this.emit({ type: 'action:before', familyId: family.id, memberId: member.id, action: decision.action });
@@ -510,11 +518,23 @@ export class SimulationEngine {
   private async emit(event: EngineEvent): Promise<void> { for (const h of this.eventHandlers) await h(event); }
 
   private summarizeResponse(result: ActionResult): string {
-    if (!result.success) return `Error: ${result.error ?? `HTTP ${result.statusCode}`}`;
+    if (!result.success) return `Failed: ${result.error ?? `HTTP ${result.statusCode}`}`;
     const data = result.response;
-    if (!data) return 'OK (empty)';
+    if (!data) return 'OK';
     if (typeof data === 'string') return data.slice(0, 200);
     const obj = data as Record<string, unknown>;
+
+    // Browser adapter responses — make them human-readable
+    if ('url' in obj && 'title' in obj) {
+      const nav = obj.navigated ? 'Navigated to' : 'Stayed on';
+      return `${nav} "${obj.title}"`;
+    }
+    if ('filled' in obj) return `Typed "${obj.filled}"`;
+    if ('toggled' in obj) return 'Toggled checkbox';
+    if ('iframe' in obj && 'clicked' in obj) return `Clicked "${obj.clicked}" inside embedded widget`;
+    if ('scrolled' in obj) return `Scrolled ${obj.direction === 'down' ? 'down' : 'up'}`;
+
+    // API adapter responses
     if (obj.id) return `Created: id=${obj.id}${obj.title ? `, title="${obj.title}"` : ''}`;
     if (Array.isArray(data)) {
       const ids = data.slice(0, 5).map((i: any) => i.id ? `#${i.id}${i.title ? ` "${i.title}"` : ''}` : '').filter(Boolean);
@@ -527,7 +547,7 @@ export class SimulationEngine {
         parts.push(`${k}: ${v.length}${ids.length ? ' (' + ids.join(',') + ')' : ''}`);
       }
     }
-    return parts.length ? parts.join(' | ') : JSON.stringify(data).slice(0, 200);
+    return parts.length ? parts.join(' | ') : JSON.stringify(data).slice(0, 150);
   }
 
   private chunk<T>(arr: T[], n: number): T[][] {

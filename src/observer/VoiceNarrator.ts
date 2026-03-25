@@ -1,6 +1,7 @@
 import { execFile, exec, execFileSync } from 'node:child_process';
 import { platform } from 'node:os';
 import type { EngineEvent, MemberRole } from '../types.js';
+import { MemeSoundboard } from './MemeSoundboard.js';
 
 // ─── Expressive fallback lines ──────────────────────────────────────
 
@@ -128,12 +129,15 @@ export class VoiceNarrator {
   private enabled: boolean;
   private backend: TTSBackend;
   private piperModel: string | null;
+  private soundboard: MemeSoundboard;
 
   constructor(options: { enabled?: boolean; tts?: TTSConfig; soundscape?: boolean } = {}) {
     this.piperModel = options.tts?.piperModel ?? null;
     this.backend = this.resolveBackend(options.tts?.backend ?? 'auto');
     this.enabled = (options.enabled ?? true) && this.backend !== 'auto';
     this.concurrent = options.soundscape ?? false;
+    this.soundboard = new MemeSoundboard();
+    this.soundboard.init();
 
     if (this.enabled) {
       console.log(`[truman] TTS backend: ${this.backend} (${VOICE_POOL.length} voices available)`);
@@ -184,6 +188,7 @@ export class VoiceNarrator {
 
     switch (event.type) {
       case 'simulation:start':
+        this.soundboard.play('start');
         this.speak('The simulation begins. Let\'s see who survives.', NARRATOR_VOICE);
         break;
 
@@ -209,6 +214,8 @@ export class VoiceNarrator {
 
           if (!log.result.success) {
             tracker.failures++;
+            // Meme sound on failure
+            this.soundboard.play('failure');
             // Narrator comments on first failure
             if (tracker.firstFailure) {
               tracker.firstFailure = false;
@@ -216,8 +223,12 @@ export class VoiceNarrator {
             }
             // Narrator escalates on repeated failures
             if (tracker.failures === 3) {
+              this.soundboard.play('frustration');
               this.speak(`That's three failures for ${member.name}. This isn't going well.`, NARRATOR_VOICE);
             }
+          } else if (log.result.success && tracker && tracker.failures > 0) {
+            // Success after failures — positive reinforcement
+            if (Math.random() < 0.3) this.soundboard.play('positive');
           }
         }
 
@@ -239,6 +250,9 @@ export class VoiceNarrator {
       case 'member:frustrated': {
         const member = this.members.get(event.memberId);
         if (!member) break;
+
+        // Rage quit sound
+        this.soundboard.play('ragequit');
 
         // NPC speaks their last words
         const thought = (event as any).thought;
@@ -273,7 +287,12 @@ export class VoiceNarrator {
         this.speak(event.result.success ? 'Against all odds, the scenario passed.' : 'The scenario has failed. As expected.', NARRATOR_VOICE);
         break;
 
+      case 'issue:detected':
+        this.soundboard.play('bug');
+        break;
+
       case 'simulation:stop':
+        this.soundboard.play('end');
         this.speak('The simulation is over. The damage has been assessed.', NARRATOR_VOICE);
         break;
     }
@@ -312,6 +331,18 @@ export class VoiceNarrator {
   // ─── TTS dispatch ─────────────────────────────────────────────────
 
   private speak(text: string, voice: VoiceProfile): void {
+    // Sanitize: remove backslashes, escaped quotes, and other artifacts
+    text = text.replace(/\\['"]/g, "'").replace(/\\/g, '').trim();
+    if (!text) return;
+
+    // Log to terminal so user sees what's being said
+    const isNarrator = voice === NARRATOR_VOICE;
+    if (isNarrator) {
+      console.log(`  🎙️  Narrator: "${text}"`);
+    } else {
+      console.log(`       🗣️  ${voice.label}: "${text}"`);
+    }
+
     if (this.concurrent) {
       // Soundscape mode — fire immediately, voices overlap
       this.playTTS(text, voice).catch(() => {});
@@ -367,7 +398,7 @@ export class VoiceNarrator {
 
   private ttsEdge(text: string, voice: VoiceProfile): Promise<void> {
     return new Promise((resolve) => {
-      const escaped = text.replace(/"/g, '\\"').replace(/'/g, "\\'");
+      const escaped = text.replace(/"/g, '\\"');
       const tmpFile = `/tmp/truman-tts-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.mp3`;
       exec(
         `edge-tts --voice "${voice.edge}" --rate "+${Math.max(0, voice.rate - 150)}%" --text "${escaped}" --write-media ${tmpFile} && afplay ${tmpFile} 2>/dev/null || mpv --no-video ${tmpFile} 2>/dev/null || play ${tmpFile} 2>/dev/null; rm -f ${tmpFile}`,
