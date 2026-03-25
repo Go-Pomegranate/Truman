@@ -91,7 +91,8 @@ jobs:
           fi
 
           VERSION="${{ steps.changelog.outputs.version }}"
-          CHANGELOG="${{ steps.changelog.outputs.discord_body }}"
+          # Escape newlines and quotes for JSON
+          CHANGELOG=$(echo "${{ steps.changelog.outputs.discord_body }}" | sed ':a;N;$!ba;s/\n/\\n/g' | sed 's/"/\\"/g')
           NPM_URL="https://www.npmjs.com/package/truman-cli"
           GITHUB_URL="https://github.com/Go-Pomegranate/Truman/releases/tag/${VERSION}"
 
@@ -100,7 +101,7 @@ jobs:
             -d "{
               \"embeds\": [{
                 \"title\": \"🎭 Truman ${VERSION} released\",
-                \"description\": \"**Changes:**\n\`\`\`\n${CHANGELOG}\n\`\`\`\",
+                \"description\": \"**Changes:**\\n\`\`\`\\n${CHANGELOG}\\n\`\`\`\",
                 \"color\": 5814783,
                 \"fields\": [
                   { \"name\": \"📦 npm\", \"value\": \"[truman-cli@${VERSION}](${NPM_URL})\", \"inline\": true },
