@@ -68,6 +68,7 @@ program
 
 		let playwrightAdapter: any = null;
 		try {
+			await ensureApiKey(opts.provider);
 			const provider = await createProvider({
 				type: opts.provider,
 				model: opts.model,
@@ -593,6 +594,7 @@ members:
 		writeFileSync(familyPath, roastFamily);
 
 		// Step 3: Run simulation
+		await ensureApiKey(opts.provider);
 		const provider = await createProvider({ type: opts.provider, model: opts.model });
 
 		let adapter;
@@ -737,6 +739,93 @@ function printBugs(bugPath?: string): void {
 		if (bug.expectedBehavior) console.log(chalk.dim(`    Expected: ${bug.expectedBehavior}`));
 		console.log("");
 	}
+}
+
+// ─── Ensure API key ────────────────────────────────────────────
+
+const ENV_KEY_MAP: Record<string, { env: string; name: string; url: string }> = {
+	openai: { env: "OPENAI_API_KEY", name: "OpenAI", url: "https://platform.openai.com/api-keys" },
+	anthropic: { env: "ANTHROPIC_API_KEY", name: "Anthropic", url: "https://console.anthropic.com/settings/keys" },
+};
+
+async function ensureApiKey(providerType: string): Promise<void> {
+	const info = ENV_KEY_MAP[providerType];
+	if (!info) return; // ollama, custom — no key needed
+
+	if (process.env[info.env]) return; // already set
+
+	// Check ~/.truman/.env for saved key
+	const { homedir } = await import("node:os");
+	const {
+		existsSync: fileExists,
+		readFileSync: readFile,
+		writeFileSync: writeFile,
+		mkdirSync: mkDir,
+	} = await import("node:fs");
+	const { join: pathJoin } = await import("node:path");
+	const globalDir = pathJoin(homedir(), ".truman");
+	const globalEnv = pathJoin(globalDir, ".env");
+
+	if (fileExists(globalEnv)) {
+		const content = readFile(globalEnv, "utf-8");
+		const match = content.match(new RegExp(`^${info.env}=(.+)$`, "m"));
+		if (match?.[1]?.trim()) {
+			process.env[info.env] = match[1].trim();
+			return;
+		}
+	}
+
+	// Interactive prompt
+	const { createInterface } = await import("node:readline");
+
+	console.log("");
+	console.log(chalk.cyan("  ╔══════════════════════════════════════════════════════╗"));
+	console.log(chalk.cyan("  ║                                                      ║"));
+	console.log(chalk.cyan(`  ║   🔑 ${info.name} API KEY                              ║`));
+	console.log(chalk.cyan("  ║                                                      ║"));
+	console.log(chalk.cyan("  ║   Your NPCs need an AI brain to think.              ║"));
+	console.log(chalk.cyan("  ║   This is saved locally and never shared.           ║"));
+	console.log(chalk.cyan("  ║                                                      ║"));
+	console.log(chalk.cyan("  ╚══════════════════════════════════════════════════════╝"));
+	console.log("");
+	console.log(chalk.dim(`  Get your key → ${info.url}`));
+	console.log("");
+
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+	const key = await new Promise<string>((resolve) => {
+		rl.question(chalk.white("  Paste your API key: "), (answer) => {
+			rl.close();
+			resolve(answer.trim());
+		});
+	});
+
+	if (!key) {
+		console.log(chalk.red("\n  ✗ No key provided. Set it manually:\n"));
+		console.log(chalk.white(`    export ${info.env}=sk-...\n`));
+		process.exit(1);
+	}
+
+	// Save to ~/.truman/.env
+	if (!fileExists(globalDir)) mkDir(globalDir, { recursive: true });
+
+	if (fileExists(globalEnv)) {
+		let content = readFile(globalEnv, "utf-8");
+		if (content.match(new RegExp(`^${info.env}=`, "m"))) {
+			content = content.replace(new RegExp(`^${info.env}=.*$`, "m"), `${info.env}=${key}`);
+		} else {
+			content = `${content.trimEnd()}\n${info.env}=${key}\n`;
+		}
+		writeFile(globalEnv, content, "utf-8");
+	} else {
+		writeFile(globalEnv, `${info.env}=${key}\n`, "utf-8");
+	}
+
+	process.env[info.env] = key;
+
+	console.log("");
+	console.log(chalk.green("  ✓ Key saved to ~/.truman/.env"));
+	console.log(chalk.dim("    You won't be asked again.\n"));
 }
 
 // ─── Auto-install Playwright ────────────────────────────────────

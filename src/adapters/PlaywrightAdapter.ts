@@ -112,9 +112,7 @@ export class PlaywrightAdapter implements AppAdapter {
 						execSync("npx playwright install chromium", { stdio: "pipe", timeout: 120_000 });
 						console.log("  ✓ Chromium installed.\n");
 					} catch {
-						throw new Error(
-							"Failed to auto-install Chromium. Run manually: npx playwright install chromium",
-						);
+						throw new Error("Failed to auto-install Chromium. Run manually: npx playwright install chromium");
 					}
 					this.browser = await chromium.launch({
 						headless: this.config.headless ?? true,
