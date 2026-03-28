@@ -539,9 +539,15 @@ export class SimulationEngine {
 		// Browser adapter responses — make them human-readable
 		if ("url" in obj && "title" in obj) {
 			const nav = obj.navigated ? "Navigated to" : "Stayed on";
-			return `${nav} "${obj.title}"`;
+			const warnings = Array.isArray(obj.warnings) ? ` [${(obj.warnings as string[]).join("; ")}]` : "";
+			return `${nav} "${obj.title}"${warnings}`;
 		}
-		if ("filled" in obj) return `Typed "${obj.filled}"`;
+		if ("filled" in obj) {
+			const validationErrs = Array.isArray(obj.validationErrors)
+				? ` ⚠️ ${(obj.validationErrors as string[]).join("; ")}`
+				: "";
+			return `Typed "${obj.filled}"${validationErrs}`;
+		}
 		if ("toggled" in obj) return "Toggled checkbox";
 		if ("iframe" in obj && "clicked" in obj) return `Clicked "${obj.clicked}" inside embedded widget`;
 		if ("scrolled" in obj) return `Scrolled ${obj.direction === "down" ? "down" : "up"}`;

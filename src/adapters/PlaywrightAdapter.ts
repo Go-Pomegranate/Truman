@@ -47,6 +47,7 @@ interface MemberSession {
 	context: BrowserContext;
 	page: Page;
 	consoleErrors: string[];
+	failedRequests: string[];
 }
 
 // ─── Weight map ─────────────────────────────────────────────────
@@ -71,7 +72,7 @@ const BLOCKED_HREF_RE = /^(javascript:|mailto:|tel:|data:)|(^#$)/;
 
 const MAX_ELEMENTS = 40;
 const MAX_DESCRIPTION_LEN = 120;
-const MAX_SUMMARY_LEN = 1200;
+const MAX_SUMMARY_LEN = 1600;
 const ACTION_TIMEOUT = 8000;
 const NAV_TIMEOUT = 10000;
 
@@ -136,8 +137,9 @@ export class PlaywrightAdapter implements AppAdapter {
 		});
 		const page = await context.newPage();
 
-		// Capture console errors and JS exceptions for LLM visibility
+		// Capture console errors, JS exceptions, and failed network requests
 		const consoleErrors: string[] = [];
+		const failedRequests: string[] = [];
 		page.on("console", (msg) => {
 			if (msg.type() === "error") {
 				consoleErrors.push(msg.text().slice(0, 200));
@@ -146,8 +148,17 @@ export class PlaywrightAdapter implements AppAdapter {
 		page.on("pageerror", (err) => {
 			consoleErrors.push(`JS Exception: ${err.message.slice(0, 200)}`);
 		});
+		page.on("requestfailed", (req) => {
+			const url = req.url();
+			const failure = req.failure()?.errorText ?? "unknown";
+			// Categorize by resource type for clarity
+			const type = req.resourceType(); // document, image, script, stylesheet, fetch, xhr...
+			if (type !== "other") {
+				failedRequests.push(`${type}: ${url.slice(0, 120)} (${failure})`);
+			}
+		});
 
-		this.sessions.set(member.id, { context, page, consoleErrors });
+		this.sessions.set(member.id, { context, page, consoleErrors, failedRequests });
 
 		await page.goto(this.baseUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
 		await page.waitForTimeout(1000);
@@ -313,20 +324,90 @@ export class PlaywrightAdapter implements AppAdapter {
 				})
 				.catch(() => [] as string[]);
 
+			// Detect page-level issues via DOM inspection
+			const pageIssues = await page
+				.evaluate((baseUrlOrigin: string) => {
+					const issues: string[] = [];
+
+					// Broken images (loaded but failed — naturalWidth is 0 for broken images)
+					const imgs = document.querySelectorAll("img");
+					let brokenCount = 0;
+					const missingAlt: string[] = [];
+					for (const img of imgs) {
+						if (img.complete && img.naturalWidth === 0 && img.src) brokenCount++;
+						if (!img.getAttribute("alt") && img.src) missingAlt.push(img.src.slice(0, 60));
+					}
+					if (brokenCount > 0) issues.push(`${brokenCount} broken image(s) on page`);
+					if (missingAlt.length > 0) issues.push(`${missingAlt.length} image(s) missing alt text`);
+
+					// Loading spinners / skeleton screens / busy states
+					const loadingIndicators = document.querySelectorAll(
+						'[aria-busy="true"], .spinner, .loading, .skeleton, [class*="skeleton"], [class*="spinner"], [class*="loading"], [role="progressbar"]',
+					);
+					if (loadingIndicators.length > 0)
+						issues.push(`Page appears to still be loading (${loadingIndicators.length} loading indicator(s) visible)`);
+
+					// Empty states
+					const emptyStates = document.querySelectorAll(
+						'[class*="empty-state"], [class*="no-results"], [class*="empty-list"], [class*="nothing-found"]',
+					);
+					if (emptyStates.length > 0) issues.push("Page shows an empty state — no content to display");
+
+					// Inputs without labels (accessibility)
+					const unlabeledInputs = Array.from(
+						document.querySelectorAll("input:not([type=hidden]):not([type=submit])"),
+					).filter((input) => {
+						const el = input as HTMLInputElement;
+						if (el.getAttribute("aria-label") || el.getAttribute("aria-labelledby")) return false;
+						if (el.id && document.querySelector(`label[for="${el.id}"]`)) return false;
+						if (el.closest("label")) return false;
+						return true;
+					});
+					if (unlabeledInputs.length > 0)
+						issues.push(`${unlabeledInputs.length} input(s) without labels (accessibility issue)`);
+
+					// Detect if we left the original domain
+					if (baseUrlOrigin && !window.location.origin.includes(new URL(baseUrlOrigin).hostname)) {
+						issues.push(`⚠️ NAVIGATED TO EXTERNAL DOMAIN: ${window.location.origin} (left the app)`);
+					}
+
+					// Detect overlay/modal blocking content
+					const overlays = document.querySelectorAll(
+						'[class*="overlay"], [class*="modal"], [class*="backdrop"], [role="dialog"], [class*="cookie"], [class*="consent"], [class*="popup"]',
+					);
+					const visibleOverlays = Array.from(overlays).filter((el) => {
+						const style = getComputedStyle(el);
+						return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+					});
+					if (visibleOverlays.length > 0)
+						issues.push(`${visibleOverlays.length} overlay/modal visible — may be blocking content`);
+
+					return issues;
+				}, this.baseUrl)
+				.catch(() => [] as string[]);
+
 			// Detect 404 / error pages
 			const is404 =
 				title.match(/404|not found|page not found|nie znaleziono/i) ||
 				headings.some((h) => h.match(/404|not found|page not found|nie znaleziono/i));
 
-			// Collect and drain console errors since last check
+			// Collect and drain console errors and failed requests since last check
 			const session = this.sessions.get(ctx.auth.memberId);
 			const consoleErrors = session?.consoleErrors?.splice(0) ?? [];
+			const failedRequests = session?.failedRequests?.splice(0) ?? [];
 
 			let summary = `Page: ${title} (${pathname})\n\n`;
 			if (is404) summary += `⚠️ THIS IS A 404 PAGE — the URL ${url} does not exist.\n\n`;
 			if (consoleErrors.length > 0) {
 				const uniqueErrors = [...new Set(consoleErrors)].slice(0, 5);
 				summary += `🔴 BROWSER CONSOLE ERRORS:\n${uniqueErrors.map((e) => `  - ${e}`).join("\n")}\n\n`;
+			}
+			if (failedRequests.length > 0) {
+				const uniqueReqs = [...new Set(failedRequests)].slice(0, 5);
+				summary += `🔴 FAILED NETWORK REQUESTS:\n${uniqueReqs.map((r) => `  - ${r}`).join("\n")}\n\n`;
+			}
+			if (pageIssues.length > 0) {
+				summary += `⚠️ PAGE ISSUES:\n${pageIssues.map((i) => `  - ${i}`).join("\n")}\n\n`;
 			}
 			if (headings.length) summary += `Headings: ${headings.join(" > ")}\n\n`;
 			if (errors.length) summary += `Alerts: ${errors.join("; ")}\n\n`;
@@ -734,26 +815,36 @@ export class PlaywrightAdapter implements AppAdapter {
 			return { success: false, error: "Element no longer exists on page (stale selector)", duration: 0 };
 		}
 		const urlBefore = page.url();
+		const htmlBefore = await page.evaluate(() => document.body.innerHTML.length).catch(() => 0);
 
-		// Track HTTP response status during navigation
+		// Track HTTP response status and network activity during click
 		let responseStatus = 0;
+		let hadNetworkActivity = false;
 		const responseHandler = (response: { url: () => string; status: () => number }) => {
-			// Capture status of document-level navigations (not assets)
+			hadNetworkActivity = true;
 			if (response.url() === page.url() || response.status() >= 400) {
 				responseStatus = response.status();
 			}
 		};
 		page.on("response", responseHandler);
 
+		let overlayDismissed = false;
 		try {
 			await page.click(selector, { timeout: ACTION_TIMEOUT });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : "";
-			// If blocked by overlay/iframe, try to dismiss and retry
 			if (msg.includes("intercepts pointer events") || msg.includes("outside of the viewport")) {
-				await this.dismissOverlay(page);
-				// Retry once after dismissal with shorter timeout
-				await page.click(selector, { timeout: 4000 });
+				overlayDismissed = await this.dismissOverlay(page);
+				if (overlayDismissed) {
+					await page.click(selector, { timeout: 4000 });
+				} else {
+					page.off("response", responseHandler);
+					return {
+						success: false,
+						error: "Click blocked by overlay/modal that could not be dismissed",
+						duration: 0,
+					};
+				}
 			} else {
 				throw err;
 			}
@@ -769,10 +860,35 @@ export class PlaywrightAdapter implements AppAdapter {
 		const navigated = urlBefore !== urlAfter;
 		const is404 = responseStatus === 404 || /404|not found|nie znaleziono/i.test(title);
 
+		// Detect external domain redirect
+		const baseHost = new URL(this.baseUrl).hostname;
+		const currentHost = new URL(urlAfter).hostname;
+		const leftDomain = navigated && baseHost !== currentHost;
+
+		// Detect dead click (nothing happened)
+		const htmlAfter = await page.evaluate(() => document.body.innerHTML.length).catch(() => 0);
+		const domChanged = Math.abs(htmlAfter - htmlBefore) > 50; // threshold to ignore minor changes
+		const isDeadClick = !navigated && !domChanged && !hadNetworkActivity;
+
+		const warnings: string[] = [];
+		if (overlayDismissed) warnings.push("overlay was blocking — dismissed automatically");
+		if (leftDomain) warnings.push(`left the app domain → ${currentHost}`);
+		if (isDeadClick) warnings.push("dead click — nothing happened (no navigation, no DOM change, no network activity)");
+
 		return {
-			success: !is404,
-			error: is404 ? `Navigated to 404 page: ${urlAfter}` : undefined,
-			response: { url: urlAfter, title, navigated, ...(is404 && { status: 404 }) },
+			success: !is404 && !isDeadClick,
+			error: is404
+				? `Navigated to 404 page: ${urlAfter}`
+				: isDeadClick
+					? "Dead click — element exists but clicking it did nothing"
+					: undefined,
+			response: {
+				url: urlAfter,
+				title,
+				navigated,
+				...(is404 && { status: 404 }),
+				...(warnings.length > 0 && { warnings }),
+			},
 			duration: 0,
 		};
 	}
@@ -904,35 +1020,58 @@ export class PlaywrightAdapter implements AppAdapter {
 
 	// ─── Overlay dismissal ─────────────────────────────────────
 
-	private async dismissOverlay(page: Page): Promise<void> {
+	/** Attempt to dismiss overlays/modals. Returns true if something was dismissed. */
+	private async dismissOverlay(page: Page): Promise<boolean> {
+		let dismissed = false;
+
 		// Strategy 1: Press Escape (closes modals, popups, dialogs)
 		await page.keyboard.press("Escape");
 		await page.waitForTimeout(500);
 
 		// Strategy 2: Close Radix/Headless UI dialogs by pressing Escape again
-		// (some dialogs need Escape twice: once to close dropdown, once to close modal)
 		await page.keyboard.press("Escape");
 		await page.waitForTimeout(300);
 
-		// Strategy 3: Force-click close buttons (modals, consent banners)
+		// Strategy 3: Force-click close/dismiss buttons (modals, consent, cookie banners)
 		try {
 			const closeSelectors = [
+				// Generic modal close
 				'[class*="modal"] button[class*="close"]',
 				'[class*="modal"] [aria-label="Close"]',
 				'[class*="modal"] [aria-label="Zamknij"]',
 				'[data-state="open"] button[class*="close"]',
 				'button[aria-label="Close"]',
 				'button[aria-label="Dismiss"]',
+				// Cookie consent — common libraries
 				"#consent-reject",
 				"#consent-accept",
 				'[class*="consent"] button',
 				'[class*="cookie"] button',
+				// OneTrust
+				"#onetrust-accept-btn-handler",
+				"#onetrust-reject-all-handler",
+				".onetrust-close-btn-handler",
+				// CookieBot
+				"#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+				"#CybotCookiebotDialogBodyButtonDecline",
+				// Quantcast / CMP
+				'[class*="qc-cmp"] button',
+				'button[mode="primary"]',
+				// GDPR generic
+				'[class*="gdpr"] button',
+				'[class*="privacy"] button[class*="accept"]',
+				'[id*="cookie"] button',
+				// Newsletter/popup close
+				'[class*="popup"] button[class*="close"]',
+				'[class*="newsletter"] button[class*="close"]',
+				'[class*="popup"] [aria-label="Close"]',
 			];
 			for (const sel of closeSelectors) {
 				const btn = await page.$(sel);
-				if (btn) {
+				if (btn && (await btn.isVisible().catch(() => false))) {
 					await btn.click({ force: true }).catch(() => {});
 					await page.waitForTimeout(300);
+					dismissed = true;
 					break;
 				}
 			}
@@ -948,34 +1087,38 @@ export class PlaywrightAdapter implements AppAdapter {
 			if (backdrop) {
 				await backdrop.click({ force: true }).catch(() => {});
 				await page.waitForTimeout(300);
+				dismissed = true;
 			}
 		} catch {
 			/* ignore */
 		}
 
 		// Strategy 5: Nuclear option — force remove pointer-events blockers via JS
-		// When <html> or a full-page overlay blocks everything, remove it
-		await page
+		const nuked = await page
 			.evaluate(() => {
-				// Remove pointer-events: none from html/body
+				let removed = 0;
 				document.documentElement.style.pointerEvents = "auto";
 				document.body.style.pointerEvents = "auto";
-				// Remove Radix overlays that block the entire page
 				document
 					.querySelectorAll('[data-radix-portal], [vaul-overlay], [data-state="open"][role="dialog"]')
 					.forEach((el) => {
 						(el as HTMLElement).style.pointerEvents = "none";
+						removed++;
 					});
-				// Remove fixed/absolute positioned full-screen overlays
 				document.querySelectorAll('div[style*="pointer-events"], div[class*="overlay"]').forEach((el) => {
 					const rect = el.getBoundingClientRect();
 					if (rect.width > window.innerWidth * 0.8 && rect.height > window.innerHeight * 0.8) {
 						(el as HTMLElement).style.pointerEvents = "none";
+						removed++;
 					}
 				});
+				return removed;
 			})
-			.catch(() => {});
+			.catch(() => 0);
+		if (nuked > 0) dismissed = true;
 		await page.waitForTimeout(200);
+
+		return dismissed;
 	}
 
 	// ─── Helpers ───────────────────────────────────────────────
