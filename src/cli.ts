@@ -853,19 +853,22 @@ async function autoInstallPlaywright(): Promise<void> {
 	}
 	console.log("");
 
-	// Find playwright CLI in node_modules
-	const playwrightCli =
-		["npx playwright", "node_modules/.bin/playwright"].find((cmd) => {
-			try {
-				execSync(`${cmd} --version`, { stdio: "pipe" });
-				return true;
-			} catch {
-				return false;
-			}
-		}) ?? "npx playwright";
+	// Resolve playwright CLI from the same node_modules as truman-cli
+	// so npx-installed truman uses its own playwright, not a global one
+	let playwrightCliCmd = "npx playwright";
+	try {
+		const { createRequire } = await import("node:module");
+		const { dirname, join: pJoin } = await import("node:path");
+		const require = createRequire(import.meta.url);
+		const playwrightPkg = dirname(require.resolve("playwright/package.json"));
+		const cliPath = pJoin(playwrightPkg, "cli.js");
+		playwrightCliCmd = `node "${cliPath}"`;
+	} catch {
+		// fallback to npx
+	}
 
 	const steps = [
-		{ msg: "  Downloading Chromium — the NPCs' window to your world...", cmd: `${playwrightCli} install chromium` },
+		{ msg: "  Downloading Chromium — the NPCs' window to your world...", cmd: `${playwrightCliCmd} install chromium` },
 	];
 
 	for (const step of steps) {

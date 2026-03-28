@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
 import type {
 	ActionContext,
@@ -109,7 +110,12 @@ export class PlaywrightAdapter implements AppAdapter {
 				if (err?.message?.includes("Executable doesn't exist")) {
 					console.log("\n  🎭 Chromium not found — installing automatically...");
 					try {
-						execSync("npx playwright install chromium", { stdio: "pipe", timeout: 120_000 });
+						// Resolve the playwright CLI from the same node_modules as the imported package
+						// so npx-installed truman-cli uses its own playwright, not a global one
+						const require = createRequire(import.meta.url);
+						const playwrightPkg = dirname(require.resolve("playwright/package.json"));
+						const playwrightCli = join(playwrightPkg, "cli.js");
+						execSync(`node "${playwrightCli}" install chromium`, { stdio: "pipe", timeout: 120_000 });
 						console.log("  ✓ Chromium installed.\n");
 					} catch {
 						throw new Error("Failed to auto-install Chromium. Run manually: npx playwright install chromium");
