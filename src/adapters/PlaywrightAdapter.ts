@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
@@ -99,10 +100,30 @@ export class PlaywrightAdapter implements AppAdapter {
 
 	async authenticate(member: MemberConfig, _family: FamilyConfig): Promise<AuthContext> {
 		if (!this.browser) {
-			this.browser = await chromium.launch({
-				headless: this.config.headless ?? true,
-				slowMo: this.config.slowMo,
-			});
+			try {
+				this.browser = await chromium.launch({
+					headless: this.config.headless ?? true,
+					slowMo: this.config.slowMo,
+				});
+			} catch (err: any) {
+				if (err?.message?.includes("Executable doesn't exist")) {
+					console.log("\n  🎭 Chromium not found — installing automatically...");
+					try {
+						execSync("npx playwright install chromium", { stdio: "pipe", timeout: 120_000 });
+						console.log("  ✓ Chromium installed.\n");
+					} catch {
+						throw new Error(
+							"Failed to auto-install Chromium. Run manually: npx playwright install chromium",
+						);
+					}
+					this.browser = await chromium.launch({
+						headless: this.config.headless ?? true,
+						slowMo: this.config.slowMo,
+					});
+				} else {
+					throw err;
+				}
+			}
 		}
 
 		const context = await this.browser.newContext({
