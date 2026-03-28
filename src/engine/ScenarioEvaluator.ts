@@ -6,6 +6,7 @@ export interface SessionHistoryEntry {
 	success: boolean;
 	responseSnippet: string;
 	goal?: string;
+	durationMs?: number;
 }
 
 /**

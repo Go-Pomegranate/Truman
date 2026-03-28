@@ -46,6 +46,7 @@ interface ScannedElement {
 interface MemberSession {
 	context: BrowserContext;
 	page: Page;
+	consoleErrors: string[];
 }
 
 // ─── Weight map ─────────────────────────────────────────────────
@@ -70,7 +71,7 @@ const BLOCKED_HREF_RE = /^(javascript:|mailto:|tel:|data:)|(^#$)/;
 
 const MAX_ELEMENTS = 40;
 const MAX_DESCRIPTION_LEN = 120;
-const MAX_SUMMARY_LEN = 800;
+const MAX_SUMMARY_LEN = 1200;
 const ACTION_TIMEOUT = 8000;
 const NAV_TIMEOUT = 10000;
 
@@ -135,7 +136,18 @@ export class PlaywrightAdapter implements AppAdapter {
 		});
 		const page = await context.newPage();
 
-		this.sessions.set(member.id, { context, page });
+		// Capture console errors and JS exceptions for LLM visibility
+		const consoleErrors: string[] = [];
+		page.on("console", (msg) => {
+			if (msg.type() === "error") {
+				consoleErrors.push(msg.text().slice(0, 200));
+			}
+		});
+		page.on("pageerror", (err) => {
+			consoleErrors.push(`JS Exception: ${err.message.slice(0, 200)}`);
+		});
+
+		this.sessions.set(member.id, { context, page, consoleErrors });
 
 		await page.goto(this.baseUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
 		await page.waitForTimeout(1000);
@@ -198,6 +210,16 @@ export class PlaywrightAdapter implements AppAdapter {
 
 		try {
 			let result: ActionResult;
+
+			// Reject empty selectors — element likely disappeared after navigation
+			const needsSelector = ["click-link", "click-button", "fill-input", "select-option", "toggle-check"];
+			if (needsSelector.includes(actionType) && !selector?.trim()) {
+				return {
+					success: false,
+					error: "Element no longer exists on page (stale selector)",
+					duration: Date.now() - start,
+				};
+			}
 
 			switch (actionType) {
 				case "click-link":
@@ -291,7 +313,21 @@ export class PlaywrightAdapter implements AppAdapter {
 				})
 				.catch(() => [] as string[]);
 
+			// Detect 404 / error pages
+			const is404 =
+				title.match(/404|not found|page not found|nie znaleziono/i) ||
+				headings.some((h) => h.match(/404|not found|page not found|nie znaleziono/i));
+
+			// Collect and drain console errors since last check
+			const session = this.sessions.get(ctx.auth.memberId);
+			const consoleErrors = session?.consoleErrors?.splice(0) ?? [];
+
 			let summary = `Page: ${title} (${pathname})\n\n`;
+			if (is404) summary += `⚠️ THIS IS A 404 PAGE — the URL ${url} does not exist.\n\n`;
+			if (consoleErrors.length > 0) {
+				const uniqueErrors = [...new Set(consoleErrors)].slice(0, 5);
+				summary += `🔴 BROWSER CONSOLE ERRORS:\n${uniqueErrors.map((e) => `  - ${e}`).join("\n")}\n\n`;
+			}
 			if (headings.length) summary += `Headings: ${headings.join(" > ")}\n\n`;
 			if (errors.length) summary += `Alerts: ${errors.join("; ")}\n\n`;
 			summary += `Visible content:\n${a11y}`;
@@ -508,7 +544,8 @@ export class PlaywrightAdapter implements AppAdapter {
 			// Sort by vertical position (above-the-fold first)
 			results.sort((a, b) => a.top - b.top);
 
-			return results;
+			// Filter out elements with empty selectors
+			return results.filter((el) => el.selector?.trim());
 		});
 
 		// Also scan visible iframes for interactive elements
@@ -674,6 +711,8 @@ export class PlaywrightAdapter implements AppAdapter {
 
 	/** Fix invalid selectors that LLMs sometimes generate */
 	private sanitizeSelector(selector: string): string {
+		// Reject empty or whitespace-only selectors
+		if (!selector?.trim()) return "";
 		// :contains("text") is not valid CSS — convert to Playwright text selector
 		const containsMatch = selector.match(/^(\w+):contains\(['"](.+?)['"]\)$/);
 		if (containsMatch) {
@@ -691,7 +730,20 @@ export class PlaywrightAdapter implements AppAdapter {
 
 	private async execClick(page: Page, selector: string): Promise<ActionResult> {
 		selector = this.sanitizeSelector(selector);
+		if (!selector) {
+			return { success: false, error: "Element no longer exists on page (stale selector)", duration: 0 };
+		}
 		const urlBefore = page.url();
+
+		// Track HTTP response status during navigation
+		let responseStatus = 0;
+		const responseHandler = (response: { url: () => string; status: () => number }) => {
+			// Capture status of document-level navigations (not assets)
+			if (response.url() === page.url() || response.status() >= 400) {
+				responseStatus = response.status();
+			}
+		};
+		page.on("response", responseHandler);
 
 		try {
 			await page.click(selector, { timeout: ACTION_TIMEOUT });
@@ -710,17 +762,26 @@ export class PlaywrightAdapter implements AppAdapter {
 		// Wait for navigation or DOM change
 		await Promise.race([page.waitForNavigation({ timeout: 3000 }).catch(() => {}), page.waitForTimeout(1500)]);
 
+		page.off("response", responseHandler);
+
 		const urlAfter = page.url();
 		const title = await page.title();
+		const navigated = urlBefore !== urlAfter;
+		const is404 = responseStatus === 404 || /404|not found|nie znaleziono/i.test(title);
+
 		return {
-			success: true,
-			response: { url: urlAfter, title, navigated: urlBefore !== urlAfter },
+			success: !is404,
+			error: is404 ? `Navigated to 404 page: ${urlAfter}` : undefined,
+			response: { url: urlAfter, title, navigated, ...(is404 && { status: 404 }) },
 			duration: 0,
 		};
 	}
 
 	private async execFill(page: Page, selector: string, value: string): Promise<ActionResult> {
 		selector = this.sanitizeSelector(selector);
+		if (!selector) {
+			return { success: false, error: "Element no longer exists on page (stale selector)", duration: 0 };
+		}
 		try {
 			await page.click(selector, { timeout: ACTION_TIMEOUT });
 		} catch (err) {
@@ -733,6 +794,43 @@ export class PlaywrightAdapter implements AppAdapter {
 			}
 		}
 		await page.fill(selector, value);
+
+		// Check for form validation errors after fill
+		await page.waitForTimeout(300); // give time for validation to fire
+		const validationErrors = await page
+			.evaluate((sel: string) => {
+				const input = document.querySelector(sel) as HTMLInputElement | null;
+				if (!input) return [];
+				const errors: string[] = [];
+				// HTML5 validation
+				if (input.validationMessage) errors.push(input.validationMessage);
+				// aria-invalid
+				if (input.getAttribute("aria-invalid") === "true") {
+					const describedBy = input.getAttribute("aria-describedby");
+					if (describedBy) {
+						const desc = document.getElementById(describedBy);
+						if (desc?.textContent?.trim()) errors.push(desc.textContent.trim());
+					}
+					if (errors.length === 0) errors.push("Field marked as invalid");
+				}
+				// Adjacent error elements
+				const next = input.nextElementSibling;
+				if (next?.classList.contains("error") || next?.getAttribute("role") === "alert") {
+					if (next.textContent?.trim()) errors.push(next.textContent.trim());
+				}
+				return errors.slice(0, 3);
+			}, selector)
+			.catch(() => [] as string[]);
+
+		if (validationErrors.length > 0) {
+			return {
+				success: false,
+				error: `Validation error: ${validationErrors.join("; ")}`,
+				response: { filled: value, validationErrors },
+				duration: 0,
+			};
+		}
+
 		return {
 			success: true,
 			response: { filled: value },

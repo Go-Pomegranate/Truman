@@ -30,6 +30,7 @@ export class PersonaBuilder {
 			success: boolean;
 			responseSnippet: string;
 			goal?: string;
+			durationMs?: number;
 		}[];
 		scenario?: ScenarioConfig;
 	}): string {
@@ -120,6 +121,7 @@ ${appState.summary}`;
 			success: boolean;
 			responseSnippet: string;
 			goal?: string;
+			durationMs?: number;
 		}[],
 	): string {
 		if (history.length === 0) return "";
@@ -139,7 +141,9 @@ ${appState.summary}`;
 				.join(", ")
 				.slice(0, 60);
 			const paramsStr = humanParams ? ` — ${humanParams}` : "";
-			return `${i + 1}. ${icon} ${h.action}${paramsStr}\n   → ${h.responseSnippet}`;
+			// Flag slow actions so LLM can comment on performance
+			const timing = h.durationMs && h.durationMs > 2000 ? ` ⚠️ SLOW (${(h.durationMs / 1000).toFixed(1)}s)` : "";
+			return `${i + 1}. ${icon} ${h.action}${paramsStr}${timing}\n   → ${h.responseSnippet}`;
 		});
 
 		return `## What You Did This Session (results from the app)

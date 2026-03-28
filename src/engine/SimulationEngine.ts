@@ -206,13 +206,7 @@ export class SimulationEngine {
 		let actionCount = 0;
 		let sessionFrustration = 0;
 		let wantsToContinue = true;
-		const sessionHistory: {
-			action: string;
-			params: Record<string, unknown>;
-			success: boolean;
-			responseSnippet: string;
-			goal?: string;
-		}[] = [];
+		const sessionHistory: SessionHistoryEntry[] = [];
 
 		const maxActions = this.config.maxActionsPerSession ?? MAX_ACTIONS_PER_SESSION;
 		while (wantsToContinue && actionCount < maxActions && this.running) {
@@ -255,6 +249,7 @@ export class SimulationEngine {
 				success: result.success,
 				responseSnippet: this.summarizeResponse(result),
 				goal: decision.goal,
+				durationMs: result.duration,
 			});
 
 			sessionFrustration = decision.frustration ?? sessionFrustration;
@@ -425,6 +420,7 @@ export class SimulationEngine {
 				success: result.success,
 				responseSnippet: this.summarizeResponse(result),
 				goal: decision.goal,
+				durationMs: result.duration,
 			});
 
 			sessionFrustration = decision.frustration ?? sessionFrustration;
