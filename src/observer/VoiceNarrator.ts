@@ -221,6 +221,7 @@ export class VoiceNarrator {
 			case "session:start": {
 				const member = this.members.get(event.memberId);
 				if (!member) break;
+				this.soundboard.play("enter");
 				this.sessionTrackers.set(member.id, {
 					actions: 0,
 					failures: 0,
@@ -289,8 +290,8 @@ export class VoiceNarrator {
 				}
 
 				const frustration = log.decision.frustration ?? log.sessionFrustration;
-				// NPCs speak more often — 40% chance, always on failure or high frustration
-				const shouldSpeak = !log.result.success || frustration > 0.4 || Math.random() < 0.4;
+				// NPCs speak most of the time — always on failure/frustration, 80% on success
+				const shouldSpeak = !log.result.success || frustration > 0.4 || Math.random() < 0.8;
 				if (!shouldSpeak) break;
 
 				const line = this.extractLine(member, {
