@@ -83,6 +83,7 @@ const SOUND_MAP: SoundDef[] = [
 	// Start / End
 	{ file: "windows-xp.mp3", category: "start" },
 	{ file: "roast-complete.mp3", category: "end" },
+	{ file: "czas-pokaze.mp3", category: "end" },
 ];
 
 // ─── Soundboard ─────────────────────────────────────────────────────

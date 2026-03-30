@@ -821,9 +821,14 @@ export class PlaywrightAdapter implements AppAdapter {
 		// Track HTTP response status and network activity during click
 		let responseStatus = 0;
 		let hadNetworkActivity = false;
-		const responseHandler = (response: { url: () => string; status: () => number }) => {
+		const responseHandler = (response: {
+			url: () => string;
+			status: () => number;
+			request: () => { resourceType: () => string };
+		}) => {
 			hadNetworkActivity = true;
-			if (response.url() === page.url() || response.status() >= 400) {
+			// Only capture status for document navigations, not assets/API calls
+			if (response.request().resourceType() === "document") {
 				responseStatus = response.status();
 			}
 		};
