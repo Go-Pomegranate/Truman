@@ -216,6 +216,7 @@ export class SimulationEngine {
 			]);
 
 			const availableActions = this.filterRepeatedActions(allActions, sessionHistory);
+			const failedActions = this.buildFailedActionCounts(sessionHistory);
 			const memberState = this.stateManager.getMemberState(family.id, member.id);
 			let decision;
 			try {
@@ -228,6 +229,7 @@ export class SimulationEngine {
 					scheduledAction: schedule,
 					currentTime: this.scheduler.now().toISOString(),
 					sessionHistory,
+					failedActions,
 				});
 			} catch (err) {
 				// LLM returned empty/invalid response — skip this turn, don't crash
@@ -277,7 +279,7 @@ export class SimulationEngine {
 
 			if (this.config.afterAction) await this.config.afterAction(log);
 			wantsToContinue = decision.wantsToContinue;
-			if (sessionFrustration >= FRUSTRATION_ABORT_THRESHOLD) {
+			if (sessionFrustration >= this.getFrustrationThreshold(member)) {
 				await this.emit({
 					type: "member:frustrated",
 					familyId: family.id,
@@ -389,9 +391,10 @@ export class SimulationEngine {
 				this.config.adapter.getAppState(ctx),
 			]);
 
-			// Hard constraint: if same action repeated 2+ times in a row, remove it from options
+			// Hard constraint: remove repeated/failed actions from options
 			// This forces the LLM to pick something else even when gpt-4o-mini ignores the prompt
 			const availableActions = this.filterRepeatedActions(allActions, sessionHistory);
+			const failedActions = this.buildFailedActionCounts(sessionHistory);
 
 			const memberState = this.stateManager.getMemberState(family.id, member.id);
 
@@ -406,6 +409,7 @@ export class SimulationEngine {
 				currentTime: this.scheduler.now().toISOString(),
 				sessionHistory,
 				scenario,
+				failedActions,
 			});
 
 			await this.emit({ type: "action:before", familyId: family.id, memberId: member.id, action: decision.action });
@@ -447,7 +451,7 @@ export class SimulationEngine {
 
 			wantsToContinue = decision.wantsToContinue;
 
-			if (sessionFrustration >= FRUSTRATION_ABORT_THRESHOLD) {
+			if (sessionFrustration >= this.getFrustrationThreshold(member)) {
 				await this.emit({
 					type: "member:frustrated",
 					familyId: family.id,
@@ -501,40 +505,68 @@ export class SimulationEngine {
 		return out;
 	}
 
-	/** Block repeated actions and loop patterns (A→B→A→B) */
+	/** Build a map of action → fail count from session history */
+	private buildFailedActionCounts(history: SessionHistoryEntry[]): Map<string, number> {
+		const failCounts = new Map<string, number>();
+		for (const h of history) {
+			if (!h.success) {
+				failCounts.set(h.action, (failCounts.get(h.action) ?? 0) + 1);
+			}
+		}
+		return failCounts;
+	}
+
+	/** Block repeated actions, loop patterns (A→B→A→B), and persistently failed actions */
 	private filterRepeatedActions(
 		actions: import("../types.js").AvailableAction[],
 		history: SessionHistoryEntry[],
 	): import("../types.js").AvailableAction[] {
-		if (history.length < 2) return actions;
+		if (history.length === 0) return actions;
 		const blocked = new Set<string>();
 
-		// Rule 1: Block same action repeated 2+ times consecutively
-		const last = history[history.length - 1]?.action;
-		if (last && last === history[history.length - 2]?.action) {
-			blocked.add(last);
+		// Rule 1: Block actions that have FAILED 2+ times in this session
+		// The LLM literally cannot pick them because they're removed from the list
+		const failCounts = this.buildFailedActionCounts(history);
+		for (const [action, count] of failCounts) {
+			if (count >= 2) blocked.add(action);
 		}
 
-		// Rule 2: Detect loop patterns (cycles of 2-4 actions repeating)
-		// e.g. A→B→A→B or A→B→C→A→B→C
-		const recent = history.slice(-10).map((h) => h.action);
-		for (let cycleLen = 2; cycleLen <= 4; cycleLen++) {
-			if (recent.length < cycleLen * 2) continue;
-			const tail = recent.slice(-cycleLen);
-			const prev = recent.slice(-cycleLen * 2, -cycleLen);
-			if (tail.every((a, i) => a === prev[i])) {
-				// Loop detected — block all actions in the cycle
-				for (const a of tail) blocked.add(a);
+		if (history.length >= 2) {
+			// Rule 2: Block same action repeated 2+ times consecutively
+			const last = history[history.length - 1]?.action;
+			if (last && last === history[history.length - 2]?.action) {
+				blocked.add(last);
+			}
+
+			// Rule 3: Detect loop patterns (cycles of 2-4 actions repeating)
+			// e.g. A→B→A→B or A→B→C→A→B→C
+			const recent = history.slice(-10).map((h) => h.action);
+			for (let cycleLen = 2; cycleLen <= 4; cycleLen++) {
+				if (recent.length < cycleLen * 2) continue;
+				const tail = recent.slice(-cycleLen);
+				const prev = recent.slice(-cycleLen * 2, -cycleLen);
+				if (tail.every((a, i) => a === prev[i])) {
+					// Loop detected — block all actions in the cycle
+					for (const a of tail) blocked.add(a);
+				}
+			}
+
+			// Rule 4: If an action has been done 4+ times in this session, block it
+			const counts = new Map<string, number>();
+			for (const h of history) {
+				counts.set(h.action, (counts.get(h.action) ?? 0) + 1);
+			}
+			for (const [action, count] of counts) {
+				if (count >= 4) blocked.add(action);
 			}
 		}
 
-		// Rule 3: If an action has been done 4+ times in this session, block it
-		const counts = new Map<string, number>();
-		for (const h of history) {
-			counts.set(h.action, (counts.get(h.action) ?? 0) + 1);
-		}
-		for (const [action, count] of counts) {
-			if (count >= 4) blocked.add(action);
+		// Rule 5: If same action picked 3 times in a row (including successes), block it
+		if (history.length >= 3) {
+			const last3 = history.slice(-3).map((h) => h.action);
+			if (last3[0] === last3[1] && last3[1] === last3[2]) {
+				blocked.add(last3[0]);
+			}
 		}
 
 		if (blocked.size === 0) return actions;
@@ -600,6 +632,13 @@ export class SimulationEngine {
 			}
 		}
 		return parts.length ? parts.join(" | ") : JSON.stringify(data).slice(0, 150);
+	}
+
+	/** Get frustration abort threshold for a member — QA testers and high-patience members get a higher bar */
+	private getFrustrationThreshold(member: { patience: number }): number {
+		if (member.patience >= 5) return 0.95;
+		if (member.patience >= 4) return 0.90;
+		return FRUSTRATION_ABORT_THRESHOLD;
 	}
 
 	private chunk<T>(arr: T[], n: number): T[][] {

@@ -73,7 +73,7 @@ const BLOCKED_HREF_RE = /^(javascript:|mailto:|tel:|data:)|(^#$)/;
 const MAX_ELEMENTS = 40;
 const MAX_DESCRIPTION_LEN = 120;
 const MAX_SUMMARY_LEN = 1600;
-const ACTION_TIMEOUT = 8000;
+const ACTION_TIMEOUT = 4000;
 const NAV_TIMEOUT = 10000;
 
 /**
@@ -161,7 +161,11 @@ export class PlaywrightAdapter implements AppAdapter {
 		this.sessions.set(member.id, { context, page, consoleErrors, failedRequests });
 
 		await page.goto(this.baseUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
-		await page.waitForTimeout(1000);
+		await page.waitForTimeout(2000);
+
+		// Dismiss cookie consent / overlays early before NPC starts interacting
+		await this.dismissOverlay(page);
+
 		await this.takeScreenshot(page, `${member.id}-start`);
 
 		return {
@@ -796,9 +800,10 @@ export class PlaywrightAdapter implements AppAdapter {
 		// Reject empty or whitespace-only selectors
 		if (!selector?.trim()) return "";
 		// :contains("text") is not valid CSS — convert to Playwright text selector
-		const containsMatch = selector.match(/^(\w+):contains\(['"](.+?)['"]\)$/);
+		const containsMatch = selector.match(/(.*?):contains\(['"](.+?)['"]\)/);
 		if (containsMatch) {
-			const [, tag, text] = containsMatch;
+			const [, base, text] = containsMatch;
+			const tag = base?.trim() || "button";
 			return `${tag}:has-text("${text}")`;
 		}
 		// Remove any remaining :contains() calls
@@ -834,6 +839,13 @@ export class PlaywrightAdapter implements AppAdapter {
 		};
 		page.on("response", responseHandler);
 
+		// Scroll element into view before clicking
+		await page.evaluate((sel) => {
+			const el = document.querySelector(sel);
+			if (el) el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+		}, selector).catch(() => {});
+		await page.waitForTimeout(200);
+
 		let overlayDismissed = false;
 		try {
 			await page.click(selector, { timeout: ACTION_TIMEOUT });
@@ -842,14 +854,30 @@ export class PlaywrightAdapter implements AppAdapter {
 			if (msg.includes("intercepts pointer events") || msg.includes("outside of the viewport")) {
 				overlayDismissed = await this.dismissOverlay(page);
 				if (overlayDismissed) {
-					await page.click(selector, { timeout: 4000 });
+					try {
+						await page.click(selector, { timeout: ACTION_TIMEOUT });
+					} catch {
+						// Last resort: JS click
+						await page.evaluate((sel) => {
+							const el = document.querySelector(sel) as HTMLElement;
+							if (el) el.click();
+						}, selector);
+					}
 				} else {
-					page.off("response", responseHandler);
-					return {
-						success: false,
-						error: "Click blocked by overlay/modal that could not be dismissed",
-						duration: 0,
-					};
+					// Fallback: try JS click directly
+					try {
+						await page.evaluate((sel) => {
+							const el = document.querySelector(sel) as HTMLElement;
+							if (el) el.click();
+						}, selector);
+					} catch {
+						page.off("response", responseHandler);
+						return {
+							success: false,
+							error: "Click blocked by overlay/modal that could not be dismissed",
+							duration: 0,
+						};
+					}
 				}
 			} else {
 				throw err;
@@ -904,13 +932,27 @@ export class PlaywrightAdapter implements AppAdapter {
 		if (!selector) {
 			return { success: false, error: "Element no longer exists on page (stale selector)", duration: 0 };
 		}
+		// Scroll element into view before filling
+		await page.evaluate((sel) => {
+			const el = document.querySelector(sel);
+			if (el) el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+		}, selector).catch(() => {});
+		await page.waitForTimeout(200);
+
 		try {
 			await page.click(selector, { timeout: ACTION_TIMEOUT });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : "";
 			if (msg.includes("intercepts pointer events") || msg.includes("outside of the viewport")) {
 				await this.dismissOverlay(page);
-				await page.click(selector, { timeout: 4000 });
+				try {
+					await page.click(selector, { timeout: ACTION_TIMEOUT });
+				} catch {
+					await page.evaluate((sel) => {
+						const el = document.querySelector(sel) as HTMLElement;
+						if (el) el.click();
+					}, selector);
+				}
 			} else {
 				throw err;
 			}
@@ -961,11 +1003,15 @@ export class PlaywrightAdapter implements AppAdapter {
 	}
 
 	private async execSelect(page: Page, selector: string, value: string): Promise<ActionResult> {
+		selector = this.sanitizeSelector(selector);
+		if (!selector) return { success: false, error: "Invalid selector", duration: 0 };
 		await page.selectOption(selector, { label: value }, { timeout: ACTION_TIMEOUT });
 		return { success: true, duration: 0 };
 	}
 
 	private async execToggle(page: Page, selector: string): Promise<ActionResult> {
+		selector = this.sanitizeSelector(selector);
+		if (!selector) return { success: false, error: "Invalid selector", duration: 0 };
 		await page.click(selector, { timeout: ACTION_TIMEOUT });
 		return { success: true, response: { toggled: true }, duration: 0 };
 	}
@@ -1030,76 +1076,86 @@ export class PlaywrightAdapter implements AppAdapter {
 	private async dismissOverlay(page: Page): Promise<boolean> {
 		let dismissed = false;
 
-		// Strategy 1: Press Escape (closes modals, popups, dialogs)
+		// Strategy 1: JS-based cookie consent click (works even when element is out of viewport)
+		try {
+			const cookieDismissed = await page.evaluate(() => {
+				// Try common cookie consent selectors
+				const selectors = [
+					'#consent-accept', '#accept-cookies', '.cookie-accept',
+					'[data-testid="cookie-accept"]', '.cc-accept', '#onetrust-accept-btn-handler',
+					'button[id*="accept"]', 'button[class*="accept"]',
+					'button[id*="consent"]', 'button[class*="consent"]',
+					'button[id*="cookie"]', 'button[class*="cookie"]',
+					'#consent-reject', '#onetrust-reject-all-handler', '.onetrust-close-btn-handler',
+					'#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+					'#CybotCookiebotDialogBodyButtonDecline',
+					'[class*="qc-cmp"] button', '[class*="gdpr"] button',
+					'[class*="consent"] button', '[class*="cookie"] button',
+					'[id*="cookie"] button',
+				];
+				for (const sel of selectors) {
+					const el = document.querySelector(sel) as HTMLElement;
+					if (el) { el.click(); return true; }
+				}
+				// Try buttons with accept-like text
+				const buttons = document.querySelectorAll('button');
+				for (const btn of buttons) {
+					const text = btn.textContent?.toLowerCase() || '';
+					if (text.includes('accept') || text.includes('agree') || text.includes('zgadzam') || text.includes('akceptuj') || text.includes('allow')) {
+						btn.click(); return true;
+					}
+				}
+				return false;
+			});
+			if (cookieDismissed) {
+				dismissed = true;
+				await page.waitForTimeout(500);
+			}
+		} catch {
+			/* ignore */
+		}
+
+		// Strategy 2: Press Escape to close remaining modals/dialogs
 		await page.keyboard.press("Escape");
 		await page.waitForTimeout(500);
-
-		// Strategy 2: Close Radix/Headless UI dialogs by pressing Escape again
 		await page.keyboard.press("Escape");
 		await page.waitForTimeout(300);
 
-		// Strategy 3: Force-click close/dismiss buttons (modals, consent, cookie banners)
+		// Strategy 3: JS-based click on close/dismiss buttons (modals, popups)
 		try {
-			const closeSelectors = [
-				// Generic modal close
-				'[class*="modal"] button[class*="close"]',
-				'[class*="modal"] [aria-label="Close"]',
-				'[class*="modal"] [aria-label="Zamknij"]',
-				'[data-state="open"] button[class*="close"]',
-				'button[aria-label="Close"]',
-				'button[aria-label="Dismiss"]',
-				// Cookie consent — common libraries
-				"#consent-reject",
-				"#consent-accept",
-				'[class*="consent"] button',
-				'[class*="cookie"] button',
-				// OneTrust
-				"#onetrust-accept-btn-handler",
-				"#onetrust-reject-all-handler",
-				".onetrust-close-btn-handler",
-				// CookieBot
-				"#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
-				"#CybotCookiebotDialogBodyButtonDecline",
-				// Quantcast / CMP
-				'[class*="qc-cmp"] button',
-				'button[mode="primary"]',
-				// GDPR generic
-				'[class*="gdpr"] button',
-				'[class*="privacy"] button[class*="accept"]',
-				'[id*="cookie"] button',
-				// Newsletter/popup close
-				'[class*="popup"] button[class*="close"]',
-				'[class*="newsletter"] button[class*="close"]',
-				'[class*="popup"] [aria-label="Close"]',
-			];
-			for (const sel of closeSelectors) {
-				const btn = await page.$(sel);
-				if (btn && (await btn.isVisible().catch(() => false))) {
-					await btn.click({ force: true }).catch(() => {});
-					await page.waitForTimeout(300);
-					dismissed = true;
-					break;
+			const modalDismissed = await page.evaluate(() => {
+				const closeSelectors = [
+					'[class*="modal"] button[class*="close"]',
+					'[class*="modal"] [aria-label="Close"]',
+					'[class*="modal"] [aria-label="Zamknij"]',
+					'[data-state="open"] button[class*="close"]',
+					'button[aria-label="Close"]',
+					'button[aria-label="Dismiss"]',
+					'[class*="popup"] button[class*="close"]',
+					'[class*="newsletter"] button[class*="close"]',
+					'[class*="popup"] [aria-label="Close"]',
+				];
+				for (const sel of closeSelectors) {
+					const el = document.querySelector(sel) as HTMLElement;
+					if (el) {
+						const style = getComputedStyle(el);
+						if (style.display !== 'none' && style.visibility !== 'hidden') {
+							el.click();
+							return true;
+						}
+					}
 				}
-			}
-		} catch {
-			/* ignore */
-		}
-
-		// Strategy 4: Click outside any modal backdrop
-		try {
-			const backdrop = await page.$(
-				'.modal-backdrop, [data-testid*="overlay"], [class*="overlay"], [class*="backdrop"]',
-			);
-			if (backdrop) {
-				await backdrop.click({ force: true }).catch(() => {});
-				await page.waitForTimeout(300);
+				return false;
+			});
+			if (modalDismissed) {
 				dismissed = true;
+				await page.waitForTimeout(300);
 			}
 		} catch {
 			/* ignore */
 		}
 
-		// Strategy 5: Handle consent banners inside iframes (OneTrust, CookieBot, etc.)
+		// Strategy 4: Handle consent banners inside iframes (OneTrust, CookieBot, etc.)
 		try {
 			const frames = page.frames().filter((f) => f !== page.mainFrame() && f.url() !== "about:blank");
 			for (const frame of frames.slice(0, 3)) {
@@ -1121,7 +1177,7 @@ export class PlaywrightAdapter implements AppAdapter {
 			/* ignore */
 		}
 
-		// Strategy 6: Nuclear option — force remove pointer-events blockers via JS
+		// Strategy 5: Nuclear option — force remove pointer-events blockers via JS
 		const nuked = await page
 			.evaluate(() => {
 				let removed = 0;
@@ -1144,6 +1200,10 @@ export class PlaywrightAdapter implements AppAdapter {
 			})
 			.catch(() => 0);
 		if (nuked > 0) dismissed = true;
+		await page.waitForTimeout(200);
+
+		// Final: press Escape once more to close any remaining modals
+		await page.keyboard.press("Escape");
 		await page.waitForTimeout(200);
 
 		return dismissed;

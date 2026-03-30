@@ -39,6 +39,7 @@ export class DecisionEngine {
 			goal?: string;
 		}[];
 		scenario?: ScenarioConfig;
+		failedActions?: Map<string, number>;
 	}): Promise<Decision> {
 		const prompt = this.personaBuilder.buildDecisionPrompt(opts);
 

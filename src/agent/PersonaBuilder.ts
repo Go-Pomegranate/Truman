@@ -33,6 +33,7 @@ export class PersonaBuilder {
 			durationMs?: number;
 		}[];
 		scenario?: ScenarioConfig;
+		failedActions?: Map<string, number>;
 	}): string {
 		const {
 			member,
@@ -44,6 +45,7 @@ export class PersonaBuilder {
 			currentTime,
 			sessionHistory,
 			scenario,
+			failedActions,
 		} = opts;
 
 		// Scenario mode: replace schedule section with mission-driven goal
@@ -56,7 +58,7 @@ export class PersonaBuilder {
 			this.buildContextSection(memberState, appState, currentTime),
 			this.buildSessionHistorySection(sessionHistory ?? []),
 			intentSection,
-			this.buildActionsSection(availableActions),
+			this.buildActionsSection(availableActions, failedActions),
 			this.buildConstraintsSection(member),
 			this.buildResponseFormat(),
 		];
@@ -222,7 +224,7 @@ You opened the app because: ${entry.description ?? entry.action}
 Based on this, set a SPECIFIC GOAL in the "goal" field — what exactly do you want to accomplish? Then pursue it step by step. If blocked, try another path or change your goal.`;
 	}
 
-	private buildActionsSection(actions: AvailableAction[]): string {
+	private buildActionsSection(actions: AvailableAction[], failedActions?: Map<string, number>): string {
 		if (actions.length === 0) {
 			return "## Available Actions\nNo actions available right now. Express your frustration.";
 		}
@@ -240,26 +242,61 @@ Based on this, set a SPECIFIC GOAL in the "goal" field — what exactly do you w
 								})
 								.join(", ")}`
 						: "";
-				return `- **${a.name}** [${a.category}]: ${a.description}${params}`;
+				// Mark actions that have failed before (1 failure = warning, 2+ removed by engine)
+				const failCount = failedActions?.get(a.name) ?? 0;
+				const failMarker = failCount > 0 ? ` ❌ FAILED ${failCount}x — DO NOT USE` : " ✓";
+				return `- **${a.name}** [${a.category}]: ${a.description}${params}${failMarker}`;
 			})
 			.join("\n");
 
 		return `## Available Actions
-${actionList}`;
+${actionList}
+
+NOTE: Actions marked with ❌ have already failed. Pick a different action marked with ✓.`;
 	}
 
 	private buildConstraintsSection(member: MemberConfig): string {
+		const isQaTester = member.id === "rose";
+		const patienceRule = member.patience <= 2
+			? "you give up FAST. If something confuses you for even a second, you're annoyed. Two failures and you're done."
+			: isQaTester
+				? "you are a QA tester — failures are EXPECTED and even exciting. You only get frustrated when you're truly STUCK (same error 3+ times with no workaround). A single failure should NOT increase your frustration at all — it's just data."
+				: member.patience >= 4
+					? "you try hard before giving up, but you still get frustrated and say so"
+					: "you have moderate patience but you're not afraid to complain";
+
+		const frustrationRules = isQaTester
+			? `- When an action fails, DO NOT increase frustration — you EXPECTED it to fail. Note the bug and move on.
+- Only increase frustration when the SAME action fails 3+ times in a row (you're stuck, not just finding bugs).
+- Even when stuck, increase frustration slowly (+0.05 per repeated failure).
+- Only set wantsToContinue to false if frustration reaches 0.95+ — you are extremely persistent.
+- Your "thought" when something breaks should be EXCITED, not frustrated (e.g. "Ooh, found one!", "That's definitely a bug — noted.", "Empty form submits? Classic.")`
+			: `- If something doesn't work or is confusing, increase your frustration realistically (at least +0.15 per failure)
+- If frustration reaches 0.7+, set wantsToContinue to false — and make your final "thought" dramatic (e.g. "I'm done. Life's too short for this." or "Nope. Uninstalling.")`;
+
 		return `## Behavioral Rules
-- Stay in character as ${member.name} at ALL times — your thoughts, reasoning, and mood should sound like a real person, not a QA bot
-- Your patience is ${member.patience}/5 — ${member.patience <= 2 ? "you give up FAST. If something confuses you for even a second, you're annoyed. Two failures and you're done." : member.patience >= 4 ? "you try hard before giving up, but you still get frustrated and say so" : "you have moderate patience but you're not afraid to complain"}
-- NEVER repeat the same action more than 2 times in a row. After doing something, move on to a different action
+- Stay in character as ${member.name} at ALL times — your thoughts, reasoning, and mood should sound like a real person${isQaTester ? "" : ", not a QA bot"}
+- Your patience is ${member.patience}/5 — ${patienceRule}
 - Explore features you haven't tried yet — curiosity is natural
-- If something doesn't work or is confusing, increase your frustration realistically (at least +0.15 per failure)
-- If frustration reaches 0.7+, set wantsToContinue to false — and make your final "thought" dramatic (e.g. "I'm done. Life's too short for this." or "Nope. Uninstalling.")
+${frustrationRules}
 - Your "thought" field is the most important output. It should be what you'd actually mutter under your breath or text to a friend. Be funny, be real, be specific about what's wrong.
 - Generate realistic parameter values (names, dates, descriptions) that fit your persona and language
 - Do NOT generate test-like data ("test123", "lorem ipsum")
-- For POST actions, always fill required params with realistic values`;
+- For POST actions, always fill required params with realistic values
+
+CRITICAL ANTI-REPETITION RULES (violations will be rejected):
+- If an action FAILED (timeout, error, marked with ❌), you MUST NOT try it again. Pick something else.
+- If you've done the same action type 2 times in a row, you MUST switch to a different action.
+- NEVER pick an action marked with ❌ FAILED — it will not work. Choose one marked with ✓.
+- A real person does NOT click the same broken button 5 times. They try something else after 1-2 failures.
+
+SAFETY — DO NOT:
+- Submit forms with real-looking data (emails, names, phone numbers) — use obviously fake data like "test@test.test" or "NPC McTestface"
+- Complete purchases, payments, or financial transactions
+- Create real accounts, sign up for waitlists, or subscribe to newsletters
+- Send messages, emails, or contact forms to real people
+- Delete, modify, or overwrite any existing data
+You are TESTING the UI, not using the service for real.`;
 	}
 
 	private buildResponseFormat(): string {
@@ -285,28 +322,35 @@ You are reviewing this website's visual design quality. You are NOT here to use 
 
 Your goal: "Evaluate the visual design quality of every section of this site"
 
-Your process:
-1. Start at the top of the page. Evaluate the hero section, header, navigation.
-2. Scroll down section by section. For each section, note in your "thought":
-   - Layout quality (spacing, alignment, visual hierarchy)
-   - Typography (font choices, sizes, readability)
-   - Color usage (harmony, contrast, accessibility)
-   - CTA clarity (can you tell what to click?)
-   - Does it look professional or AI-generated/template-y?
-   - Mobile-readiness (does it look like it would work on a phone?)
-3. Click into 2-3 subpages to check consistency across the site.
-4. Your final action should summarize your overall design verdict.
+Your review process:
+1. SCAN PHASE (first 8 actions): Scroll from top to bottom of the page. Take notes mentally on each section.
+   - Use scroll-down repeatedly until you reach the footer. Do NOT scroll back up during this phase.
+   - In your "thought" during scanning, briefly note what each section IS (hero, features grid, testimonials, pricing, footer, etc.)
+   - Do NOT give detailed critique yet — just observe and catalog.
+2. REVIEW PHASE (remaining actions): Navigate to specific sections and give detailed critique.
+   - Scroll back to sections that caught your eye (good or bad).
+   - Click into 2-3 subpages to check design consistency across the site.
+   - Your final action should summarize your overall design verdict with a score.
 
-IMPORTANT: Your primary actions are scroll-down, scroll-up, and occasional navigation clicks.
-You are NOT trying to complete any transaction. You are a design critic doing a visual audit.
-Every "thought" should be a specific design observation, not a functional complaint.
+For each section you review, your thought MUST include:
+- Section name (hero, nav, features, footer, etc.)
+- Score: 1-10
+- What works
+- What doesn't work
+- Is it AI-generated looking? (yes/no with reason)
 
-Example thoughts:
-- "Hero section has no clear CTA — where am I supposed to click?"
-- "These cards have 4 different border-radius values. Pick one."
-- "Font pairing is actually solid — clean sans-serif headers with readable body text"
-- "This footer looks like a 2015 WordPress template. Needs work."
-- "Spacing between sections is inconsistent — 64px here, 32px there, 48px over there"`;
+Your comments should be SPECIFIC, not vague:
+WRONG: "This section looks off"
+RIGHT: "Hero section (6/10): CTA button has low contrast against the gradient background. The heading font is generic — looks like default Tailwind prose. Not AI-generated but feels template-y."
+
+WRONG: "These overlays are killing my vibe"
+RIGHT: "Cookie consent banner blocks 30% of viewport and doesn't auto-dismiss. The banner itself uses inconsistent border-radius compared to the rest of the UI."
+
+You evaluate: typography, color contrast, spacing/whitespace, visual hierarchy, CTA clarity, mobile-readiness, consistency, whether it looks AI-generated or template-based.
+
+IMPORTANT: Your primary actions are scroll-down (especially in scan phase), scroll-up (in review phase), and occasional navigation clicks.
+You are NOT trying to complete any transaction. You are a design critic doing a structured visual audit.
+NEVER scroll up and down aimlessly — scan ONCE top-to-bottom, then review specific sections.`;
 	}
 
 	private buildRoseIntent(): string {
@@ -330,6 +374,14 @@ RULES:
 - You are methodical — work left-to-right, top-to-bottom.
 
 You are NOT trying to accomplish a user goal. You are trying to find bugs.
-Every broken link, failed click, or weird behavior is a win for you.`;
+Every broken link, failed click, or weird behavior is a WIN for you — not a frustration.
+
+FRUSTRATION MODEL (critical):
+- Finding a bug = GOOD. Your frustration should stay LOW or even DECREASE when you find bugs.
+- Your frustration starts at 0.0 and should stay near 0.0 for most of the session.
+- The ONLY thing that frustrates you is being STUCK — the same action failing 3+ times with no alternative.
+- Even then, increase frustration by only 0.05 per repeated stuck failure.
+- Keep wantsToContinue=true until you've tested everything or frustration hits 0.95.
+- You should easily last 8-10 actions per session. Quitting early means you failed as a QA tester.`;
 	}
 }

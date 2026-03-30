@@ -1,0 +1,9 @@
+{
+	"permissions": {
+		"allow": [
+			"Bash(find /Users/pantere/Repositories/opensource/truman/tests -type f -name *.ts -o -name *.js)",
+			"Bash(grep -A 1 \"if \\(!this.apiKey\\)\" /Users/pantere/Repositories/opensource/truman/src/agent/providers/*.ts)",
+			"Bash(npm test:*)"
+		]
+	}
+}
