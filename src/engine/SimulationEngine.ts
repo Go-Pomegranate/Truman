@@ -501,18 +501,46 @@ export class SimulationEngine {
 		return out;
 	}
 
-	/** Block action repeated 2+ times consecutively */
+	/** Block repeated actions and loop patterns (A→B→A→B) */
 	private filterRepeatedActions(
 		actions: import("../types.js").AvailableAction[],
 		history: SessionHistoryEntry[],
 	): import("../types.js").AvailableAction[] {
 		if (history.length < 2) return actions;
+		const blocked = new Set<string>();
+
+		// Rule 1: Block same action repeated 2+ times consecutively
 		const last = history[history.length - 1]?.action;
 		if (last && last === history[history.length - 2]?.action) {
-			const f = actions.filter((a) => a.name !== last);
-			return f.length >= 2 ? f : actions;
+			blocked.add(last);
 		}
-		return actions;
+
+		// Rule 2: Detect loop patterns (cycles of 2-4 actions repeating)
+		// e.g. A→B→A→B or A→B→C→A→B→C
+		const recent = history.slice(-10).map((h) => h.action);
+		for (let cycleLen = 2; cycleLen <= 4; cycleLen++) {
+			if (recent.length < cycleLen * 2) continue;
+			const tail = recent.slice(-cycleLen);
+			const prev = recent.slice(-cycleLen * 2, -cycleLen);
+			if (tail.every((a, i) => a === prev[i])) {
+				// Loop detected — block all actions in the cycle
+				for (const a of tail) blocked.add(a);
+			}
+		}
+
+		// Rule 3: If an action has been done 4+ times in this session, block it
+		const counts = new Map<string, number>();
+		for (const h of history) {
+			counts.set(h.action, (counts.get(h.action) ?? 0) + 1);
+		}
+		for (const [action, count] of counts) {
+			if (count >= 4) blocked.add(action);
+		}
+
+		if (blocked.size === 0) return actions;
+		const filtered = actions.filter((a) => !blocked.has(a.name));
+		// Keep at least 2 actions available
+		return filtered.length >= 2 ? filtered : actions;
 	}
 
 	// ─── Deterministic Scenarios ────────────────────────────────────

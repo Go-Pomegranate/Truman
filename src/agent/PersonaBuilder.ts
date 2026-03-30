@@ -88,10 +88,17 @@ ${member.quirks.length > 0 ? `Your quirks:\n${member.quirks.map((q) => `- ${q}`)
 		// Count consecutive repeats of the last action
 		const lastAction = recent[0];
 		const consecutiveRepeats = lastAction ? recent.filter((a) => a === lastAction).length : 0;
-		const diversityHint =
-			consecutiveRepeats >= 2
-				? `\n⚠ You've done "${lastAction}" ${consecutiveRepeats}x in a row. A real person would explore something else now.`
-				: "";
+		let diversityHint = "";
+		if (consecutiveRepeats >= 2) {
+			diversityHint = `\n⚠ You've done "${lastAction}" ${consecutiveRepeats}x in a row. A real person would explore something else now.`;
+		}
+
+		// Detect loop pattern (alternating between 2-3 actions)
+		const uniqueRecent = new Set(recent);
+		if (recent.length >= 5 && uniqueRecent.size <= 2) {
+			const loopActions = [...uniqueRecent].join('" and "');
+			diversityHint += `\n🔴 LOOP DETECTED: You've been alternating between "${loopActions}" for ${recent.length} actions. STOP. You are stuck. Try a COMPLETELY DIFFERENT action — scroll, go back, or click something you haven't tried yet.`;
+		}
 
 		return `## Current Context
 Time: ${currentTime}

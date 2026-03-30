@@ -206,10 +206,17 @@ export class VoiceNarrator {
 		if (!this.enabled) return;
 
 		switch (event.type) {
-			case "simulation:start":
+			case "simulation:start": {
 				this.soundboard.play("start");
-				this.speak("The simulation begins. Let's see who survives.", NARRATOR_VOICE);
+				const startLines = [
+					"The simulation begins. Let's see who survives.",
+					"Welcome to the roast. No app leaves unscathed.",
+					"Deploying synthetic users. May your app have mercy.",
+					"The NPCs are here. They have opinions.",
+				];
+				this.speak(startLines[Math.floor(Math.random() * startLines.length)], NARRATOR_VOICE);
 				break;
+			}
 
 			case "session:start": {
 				const member = this.members.get(event.memberId);
@@ -221,7 +228,13 @@ export class VoiceNarrator {
 					peakFrustration: 0,
 					firstFailure: true,
 				});
-				this.speak(`${member.name} enters the app. Let's see how long they last.`, NARRATOR_VOICE);
+				const enterLines = [
+					`${member.name} enters the app. Let's see how long they last.`,
+					`${member.name} is up. The clock is ticking.`,
+					`Here comes ${member.name}. This should be interesting.`,
+					`${member.name} has entered the building. Brace yourselves.`,
+				];
+				this.speak(enterLines[Math.floor(Math.random() * enterLines.length)], NARRATOR_VOICE);
 				break;
 			}
 
@@ -244,16 +257,34 @@ export class VoiceNarrator {
 						// Narrator comments on first failure
 						if (tracker.firstFailure) {
 							tracker.firstFailure = false;
-							this.speak(`${member.name} just hit their first wall.`, NARRATOR_VOICE);
+							const firstWallLines = [
+								`${member.name} just hit their first wall.`,
+								`And there it is. ${member.name}'s first frustration.`,
+								`${member.name} found a crack in the armor.`,
+								`First blood. ${member.name} is not happy.`,
+							];
+							this.speak(firstWallLines[Math.floor(Math.random() * firstWallLines.length)], NARRATOR_VOICE);
 						}
 						// Narrator escalates on repeated failures
 						if (tracker.failures === 3) {
 							this.soundboard.play("frustration");
-							this.speak(`That's three failures for ${member.name}. This isn't going well.`, NARRATOR_VOICE);
+							const threeFailLines = [
+								`That's three failures for ${member.name}. This isn't going well.`,
+								`Three strikes. ${member.name} is losing patience.`,
+								`${member.name} has failed three times now. The app is winning.`,
+							];
+							this.speak(threeFailLines[Math.floor(Math.random() * threeFailLines.length)], NARRATOR_VOICE);
+						}
+						if (tracker.failures === 5) {
+							this.soundboard.play("frustration");
+							this.speak(`Five failures. ${member.name} is one click away from giving up.`, NARRATOR_VOICE);
 						}
 					} else if (log.result.success && tracker && tracker.failures > 0) {
-						// Success after failures — positive reinforcement
-						if (Math.random() < 0.3) this.soundboard.play("positive");
+						// Success after failures — positive reinforcement (50% chance)
+						if (Math.random() < 0.5) this.soundboard.play("positive");
+					} else if (log.result.success && tracker && tracker.actions % 8 === 0) {
+						// Periodic positive — every 8 smooth actions
+						if (Math.random() < 0.4) this.soundboard.play("positive");
 					}
 				}
 
@@ -303,27 +334,51 @@ export class VoiceNarrator {
 				const member = this.members.get(event.memberId);
 				if (!member) break;
 				const tracker = this.sessionTrackers.get(member.id);
-				if (tracker && tracker.failures === 0 && tracker.actions > 3) {
-					this.speak(`${member.name} made it through without a single issue. Suspicious.`, NARRATOR_VOICE);
+				if (tracker) {
+					if (tracker.failures === 0 && tracker.actions > 3) {
+						const cleanLines = [
+							`${member.name} made it through without a single issue. Suspicious.`,
+							`Zero failures for ${member.name}. Either the app is perfect, or they didn't try hard enough.`,
+							`${member.name} had a flawless run. That's... unexpected.`,
+						];
+						this.speak(cleanLines[Math.floor(Math.random() * cleanLines.length)], NARRATOR_VOICE);
+					} else if (tracker.failures > 3) {
+						const roughLines = [
+							`${member.name} survived, but barely. ${tracker.failures} failures in ${tracker.actions} actions.`,
+							`${member.name} is done. That was painful to watch.`,
+						];
+						this.speak(roughLines[Math.floor(Math.random() * roughLines.length)], NARRATOR_VOICE);
+						this.soundboard.play("frustration");
+					}
 				}
 				break;
 			}
 
 			case "scenario:end":
-				this.speak(
-					event.result.success ? "Against all odds, the scenario passed." : "The scenario has failed. As expected.",
-					NARRATOR_VOICE,
-				);
+				if (event.result.success) {
+					this.soundboard.play("positive");
+					this.speak("Against all odds, the scenario passed.", NARRATOR_VOICE);
+				} else {
+					this.soundboard.play("failure");
+					this.speak("The scenario has failed. As expected.", NARRATOR_VOICE);
+				}
 				break;
 
 			case "issue:detected":
 				this.soundboard.play("bug");
 				break;
 
-			case "simulation:stop":
+			case "simulation:stop": {
 				this.soundboard.play("end");
-				this.speak("The simulation is over. The damage has been assessed.", NARRATOR_VOICE);
+				const endLines = [
+					"The simulation is over. The damage has been assessed.",
+					"That's a wrap. Check the report. It's not pretty.",
+					"The NPCs have spoken. Fix your app.",
+					"Roast complete. The bugs have been documented.",
+				];
+				this.speak(endLines[Math.floor(Math.random() * endLines.length)], NARRATOR_VOICE);
 				break;
+			}
 		}
 	}
 

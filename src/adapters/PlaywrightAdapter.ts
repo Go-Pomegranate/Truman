@@ -386,10 +386,11 @@ export class PlaywrightAdapter implements AppAdapter {
 				}, this.baseUrl)
 				.catch(() => [] as string[]);
 
-			// Detect 404 / error pages
+			// Detect 404 / error pages — only match when title or h1 is clearly a 404
+			// (not just containing "404" somewhere in content, which causes false positives in SPAs)
 			const is404 =
-				title.match(/404|not found|page not found|nie znaleziono/i) ||
-				headings.some((h) => h.match(/404|not found|page not found|nie znaleziono/i));
+				/^\s*(404|not found|page not found|nie znaleziono|strona nie istnieje)\s*$/i.test(title) ||
+				(headings[0] && /^\s*(404|not found|page not found|nie znaleziono)\s*$/i.test(headings[0]));
 
 			// Collect and drain console errors and failed requests since last check
 			const session = this.sessions.get(ctx.auth.memberId);
@@ -858,7 +859,7 @@ export class PlaywrightAdapter implements AppAdapter {
 		const urlAfter = page.url();
 		const title = await page.title();
 		const navigated = urlBefore !== urlAfter;
-		const is404 = responseStatus === 404 || /404|not found|nie znaleziono/i.test(title);
+		const is404 = responseStatus === 404 || /^\s*(404|not found|page not found|nie znaleziono)\s*$/i.test(title);
 
 		// Detect external domain redirect
 		const baseHost = new URL(this.baseUrl).hostname;
@@ -1093,7 +1094,29 @@ export class PlaywrightAdapter implements AppAdapter {
 			/* ignore */
 		}
 
-		// Strategy 5: Nuclear option — force remove pointer-events blockers via JS
+		// Strategy 5: Handle consent banners inside iframes (OneTrust, CookieBot, etc.)
+		try {
+			const frames = page.frames().filter((f) => f !== page.mainFrame() && f.url() !== "about:blank");
+			for (const frame of frames.slice(0, 3)) {
+				try {
+					const closeBtn = await frame.$(
+						'button[aria-label*="close" i], button[aria-label*="reject" i], #onetrust-close-banner, #CybotCookiebotDialogBodyButtonDecline, .cmp-close-button',
+					);
+					if (closeBtn) {
+						await closeBtn.click({ force: true }).catch(() => {});
+						await page.waitForTimeout(300);
+						dismissed = true;
+						break;
+					}
+				} catch {
+					/* ignore frame access errors (CORS) */
+				}
+			}
+		} catch {
+			/* ignore */
+		}
+
+		// Strategy 6: Nuclear option — force remove pointer-events blockers via JS
 		const nuked = await page
 			.evaluate(() => {
 				let removed = 0;
