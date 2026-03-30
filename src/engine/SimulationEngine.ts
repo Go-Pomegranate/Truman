@@ -210,10 +210,21 @@ export class SimulationEngine {
 
 		const maxActions = this.config.maxActionsPerSession ?? MAX_ACTIONS_PER_SESSION;
 		while (wantsToContinue && actionCount < maxActions && this.running) {
-			const [allActions, appState] = await Promise.all([
-				this.config.adapter.getAvailableActions(ctx),
-				this.config.adapter.getAppState(ctx),
-			]);
+			let allActions: import("../types.js").AvailableAction[];
+			let appState: import("../types.js").AppState;
+			try {
+				[allActions, appState] = await Promise.all([
+					this.config.adapter.getAvailableActions(ctx),
+					this.config.adapter.getAppState(ctx),
+				]);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				if (msg.includes("Target page") || msg.includes("browser has been closed")) {
+					console.error(`  ⚠ Browser closed for ${member.name} — ending session gracefully`);
+					break;
+				}
+				throw err;
+			}
 
 			const availableActions = this.filterRepeatedActions(allActions, sessionHistory);
 			const failedActions = this.buildFailedActionCounts(sessionHistory);
@@ -244,7 +255,17 @@ export class SimulationEngine {
 			// Guardrail: fill missing required params from action definitions (LLM sometimes sends {})
 			const filledParams = this.fillMissingRequiredParams(decision.action, decision.params, availableActions);
 			const chosenAction: ChosenAction = { name: decision.action, params: filledParams };
-			const result = await this.config.adapter.executeAction(chosenAction, ctx);
+			let result: ActionResult;
+			try {
+				result = await this.config.adapter.executeAction(chosenAction, ctx);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				if (msg.includes("Target page") || msg.includes("browser has been closed")) {
+					console.error(`  ⚠ Browser closed for ${member.name} — ending session gracefully`);
+					break;
+				}
+				throw err;
+			}
 			sessionHistory.push({
 				action: decision.action,
 				params: filledParams,
@@ -386,10 +407,21 @@ export class SimulationEngine {
 		};
 
 		while (wantsToContinue && actionCount < maxActions && this.running) {
-			const [allActions, appState] = await Promise.all([
-				this.config.adapter.getAvailableActions(ctx),
-				this.config.adapter.getAppState(ctx),
-			]);
+			let allActions: import("../types.js").AvailableAction[];
+			let appState: import("../types.js").AppState;
+			try {
+				[allActions, appState] = await Promise.all([
+					this.config.adapter.getAvailableActions(ctx),
+					this.config.adapter.getAppState(ctx),
+				]);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				if (msg.includes("Target page") || msg.includes("browser has been closed")) {
+					console.error(`  ⚠ Browser closed for ${member.name} (scenario ${scenario.id}) — ending session gracefully`);
+					break;
+				}
+				throw err;
+			}
 
 			// Hard constraint: remove repeated/failed actions from options
 			// This forces the LLM to pick something else even when gpt-4o-mini ignores the prompt
@@ -416,7 +448,17 @@ export class SimulationEngine {
 
 			const filledParams = this.fillMissingRequiredParams(decision.action, decision.params, availableActions);
 			const chosenAction: ChosenAction = { name: decision.action, params: filledParams };
-			const result = await this.config.adapter.executeAction(chosenAction, ctx);
+			let result: ActionResult;
+			try {
+				result = await this.config.adapter.executeAction(chosenAction, ctx);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				if (msg.includes("Target page") || msg.includes("browser has been closed")) {
+					console.error(`  ⚠ Browser closed for ${member.name} (scenario ${scenario.id}) — ending session gracefully`);
+					break;
+				}
+				throw err;
+			}
 
 			sessionHistory.push({
 				action: decision.action,

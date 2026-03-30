@@ -25,6 +25,8 @@ export interface PlaywrightAdapterConfig {
 	slowMo?: number;
 	/** Send screenshots to LLM for visual understanding */
 	vision?: boolean;
+	/** Prevent NPCs from submitting forms (safe mode) */
+	noSubmit?: boolean;
 }
 
 // ─── Internal types ─────────────────────────────────────────────
@@ -41,6 +43,7 @@ interface ScannedElement {
 	checked?: boolean;
 	options?: string[];
 	top: number; // for above-the-fold sorting
+	isSubmit?: boolean;
 }
 
 interface MemberSession {
@@ -68,6 +71,8 @@ const ACTION_WEIGHTS: Record<string, number> = {
 
 const BLOCKED_HREF_RE = /^(javascript:|mailto:|tel:|data:)|(^#$)/;
 
+const SUBMIT_TEXT_RE = /^(submit|sign\s*up|join|register|subscribe|send|apply|create\s*account|zapisz|wy[śs]lij|do[łl][ąa]cz|zarejestruj)$/i;
+
 // ─── Max limits ─────────────────────────────────────────────────
 
 const MAX_ELEMENTS = 40;
@@ -89,10 +94,12 @@ export class PlaywrightAdapter implements AppAdapter {
 	private sessions = new Map<string, MemberSession>();
 	private screenshotDir: string;
 	private screenshotIdx = 0;
+	private noSubmit: boolean;
 
 	constructor(config: PlaywrightAdapterConfig) {
 		this.config = config;
 		this.baseUrl = config.baseUrl.replace(/\/$/, "");
+		this.noSubmit = config.noSubmit ?? false;
 		this.screenshotDir = config.screenshotDir ?? ".truman/screenshots";
 		if (!existsSync(this.screenshotDir)) {
 			mkdirSync(this.screenshotDir, { recursive: true });
@@ -181,16 +188,23 @@ export class PlaywrightAdapter implements AppAdapter {
 		const page = this.getPage(ctx);
 		if (!page) return STATIC_ACTIONS;
 
-		const elements = await this.scanPage(page);
-		const actions: AvailableAction[] = [];
+		try {
+			const elements = await this.scanPage(page);
+			const actions: AvailableAction[] = [];
 
-		for (let i = 0; i < elements.length; i++) {
-			const el = elements[i];
-			const action = this.elementToAction(el, i);
-			if (action) actions.push(action);
+			for (let i = 0; i < elements.length; i++) {
+				const el = elements[i];
+				const action = this.elementToAction(el, i);
+				if (action) actions.push(action);
+			}
+
+			return [...actions, ...STATIC_ACTIONS];
+		} catch (err) {
+			if (err instanceof Error && (err.message.includes("Target page") || err.message.includes("browser has been closed"))) {
+				return [];
+			}
+			throw err;
 		}
-
-		return [...actions, ...STATIC_ACTIONS];
 	}
 
 	// ─── executeAction ──────────────────────────────────────────
@@ -218,6 +232,28 @@ export class PlaywrightAdapter implements AppAdapter {
 				return {
 					success: false,
 					error: `iframe action failed: ${err instanceof Error ? err.message : String(err)}`,
+					duration: Date.now() - start,
+				};
+			}
+		}
+
+		// Block form submissions when --no-submit is active
+		if (this.noSubmit && (actionType === "click-button" || actionType === "click-link") && selector) {
+			const isSubmit = await page.evaluate((sel: string) => {
+				const el = document.querySelector(sel);
+				if (!el) return false;
+				const submitTextRe = /^(submit|sign\s*up|join|register|subscribe|send|apply|create\s*account|zapisz|wy[śs]lij|do[łl][ąa]cz|zarejestruj)$/i;
+				const text = (el.textContent?.trim() ?? "").slice(0, 80);
+				if ((el as HTMLButtonElement).type === "submit") return true;
+				if (submitTextRe.test(text)) return true;
+				if (el.closest("form")) return true;
+				return false;
+			}, selector).catch(() => false);
+
+			if (isSubmit) {
+				return {
+					success: true,
+					response: { blocked: "Form submission blocked by --no-submit" },
 					duration: Date.now() - start,
 				};
 			}
@@ -271,11 +307,15 @@ export class PlaywrightAdapter implements AppAdapter {
 			await this.takeScreenshot(page, `${ctx.member.id}-${action.name}`);
 			return result;
 		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (msg.includes("Target page") || msg.includes("browser has been closed")) {
+				return { success: false, error: "Browser closed", duration: 0 };
+			}
 			const duration = Date.now() - start;
 			await this.takeScreenshot(page, `${ctx.member.id}-${action.name}-error`).catch(() => {});
 			return {
 				success: false,
-				error: err instanceof Error ? err.message : String(err),
+				error: msg,
 				duration,
 			};
 		}
@@ -463,6 +503,7 @@ export class PlaywrightAdapter implements AppAdapter {
 	// ─── Page scanning ─────────────────────────────────────────
 
 	private async scanPage(page: Page): Promise<ScannedElement[]> {
+		try {
 		const elements: ScannedElement[] = await page.evaluate(() => {
 			const results: any[] = [];
 			const seen = new Set<string>();
@@ -551,6 +592,7 @@ export class PlaywrightAdapter implements AppAdapter {
 			}
 
 			// Collect buttons
+			const submitTextRe = /^(submit|sign\s*up|join|register|subscribe|send|apply|create\s*account|zapisz|wy[śs]lij|do[łl][ąa]cz|zarejestruj)$/i;
 			for (const el of document.querySelectorAll('button, [role="button"], input[type="submit"]')) {
 				if (!isVisible(el)) continue;
 				if ((el as HTMLButtonElement).disabled) continue;
@@ -559,12 +601,17 @@ export class PlaywrightAdapter implements AppAdapter {
 				const key = `button:${text}`;
 				if (seen.has(key)) continue;
 				seen.add(key);
+				const isSubmit =
+					(el as HTMLButtonElement).type === "submit" ||
+					submitTextRe.test(text) ||
+					!!el.closest("form");
 				results.push({
 					tag: el.tagName.toLowerCase(),
 					type: "button",
 					text,
 					selector: getSelector(el),
 					top: getRect(el).top,
+					isSubmit,
 				});
 			}
 
@@ -708,6 +755,12 @@ export class PlaywrightAdapter implements AppAdapter {
 		}
 
 		return elements.slice(0, MAX_ELEMENTS);
+		} catch (err) {
+			if (err instanceof Error && (err.message.includes("Target page") || err.message.includes("browser has been closed"))) {
+				return [];
+			}
+			throw err;
+		}
 	}
 
 	// ─── Element → AvailableAction mapping ─────────────────────
@@ -725,13 +778,15 @@ export class PlaywrightAdapter implements AppAdapter {
 				};
 			}
 			case "button": {
-				const desc = `Button: "${el.text}"`;
+				const submitNote = el.isSubmit && this.noSubmit ? " (blocked by --no-submit)" : "";
+				const desc = `Button: "${el.text}"${submitNote}`;
 				return {
 					name: `click-button-${index}`,
 					description: desc.slice(0, MAX_DESCRIPTION_LEN),
 					category: "interaction",
 					params: [this.selectorParam(el.selector)],
 					weight: ACTION_WEIGHTS["click-button"],
+					isSubmit: el.isSubmit,
 				};
 			}
 			case "text-input": {

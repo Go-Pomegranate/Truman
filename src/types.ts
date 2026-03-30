@@ -113,6 +113,8 @@ export interface AvailableAction {
 	params: ActionParam[];
 	/** Weight for random selection (higher = more likely) */
 	weight?: number;
+	/** Whether this action is a form submission */
+	isSubmit?: boolean;
 }
 
 export interface ActionParam {

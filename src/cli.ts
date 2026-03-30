@@ -389,6 +389,7 @@ program
 	.option("--api", "Use HTTP API probing instead of browser (for REST APIs / localhost)")
 	.option("--headless", "Run browser without visible window")
 	.option("--vision", "Send screenshots to LLM — NPCs see the page visually (uses more tokens)")
+	.option("--no-submit", "Prevent NPCs from submitting forms (safe mode)")
 	.option("--fresh", "Clear state from previous roasts (NPCs forget everything)")
 	.action(async (opts) => {
 		// --target is an alias for --url
@@ -447,6 +448,7 @@ program
 				screenshotDir: resolve(join(tmpDir, "screenshots")),
 				slowMo: opts.headless ? 0 : 100,
 				vision: !!opts.vision,
+				noSubmit: opts.submit === false,
 			});
 			console.log(
 				chalk.cyan(`  🌐 Browser mode${opts.headless ? " (headless)" : " — watch your NPCs roast your app live"}`),
