@@ -576,6 +576,11 @@ export class PlaywrightAdapter implements AppAdapter {
 				const href = el.getAttribute("href") ?? "";
 				const blockedRe = /^(javascript:|mailto:|tel:|data:)|(^#$)/;
 				if (blockedRe.test(href)) continue;
+				// Block external domain links
+				try {
+					const linkUrl = new URL(href, window.location.origin);
+					if (linkUrl.hostname !== window.location.hostname) continue;
+				} catch { /* relative URLs are fine */ }
 				const text = (el.textContent?.trim() ?? "").slice(0, 80);
 				if (!text) continue;
 				const key = `link:${text}`;
@@ -961,8 +966,20 @@ export class PlaywrightAdapter implements AppAdapter {
 
 		const warnings: string[] = [];
 		if (overlayDismissed) warnings.push("overlay was blocking — dismissed automatically");
-		if (leftDomain) warnings.push(`left the app domain → ${currentHost}`);
 		if (isDeadClick) warnings.push("dead click — nothing happened (no navigation, no DOM change, no network activity)");
+
+		// Domain lock — if NPC left the target domain, go back immediately
+		if (leftDomain) {
+			warnings.push(`left the app domain → ${currentHost}, returning to base`);
+			await page.goto(this.baseUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => {});
+			await page.waitForTimeout(500);
+			return {
+				success: false,
+				error: `Link led to external domain (${currentHost}) — returned to app`,
+				response: { url: this.baseUrl, externalDomain: currentHost },
+				duration: 0,
+			};
+		}
 
 		return {
 			success: !is404 && !isDeadClick,
