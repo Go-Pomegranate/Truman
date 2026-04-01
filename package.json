@@ -1,6 +1,6 @@
 {
 	"name": "truman-cli",
-	"version": "0.1.16",
+	"version": "0.1.17",
 	"description": "Your app's users are fake. They just don't know it yet.",
 	"type": "module",
 	"license": "MIT",
@@ -80,5 +80,12 @@
 		"type": "git",
 		"url": "https://github.com/Go-Pomegranate/Truman.git"
 	},
-	"files": ["dist", "assets/sounds", "schemas", "README.md", "LICENSE", "PHILOSOPHY.md"]
+	"files": [
+		"dist",
+		"assets/sounds",
+		"schemas",
+		"README.md",
+		"LICENSE",
+		"PHILOSOPHY.md"
+	]
 }
